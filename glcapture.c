@@ -93,9 +93,9 @@ struct frame_info {
 struct fifo {
    struct {
       struct frame_info info;
-      uint64_t base;
       bool ready;
    } stream[STREAM_LAST];
+   uint64_t base;
    size_t size;
    int fd;
    bool created;
@@ -196,13 +196,14 @@ write_data_unsafe(struct fifo *fifo, const struct frame_info *info, const void *
 
       WARNX("stream ready, writing headers");
       write(fifo->fd, header, (p + 1) - header);
+      fifo->base = get_time_ns();
    }
 
-   if (!fifo->stream[info->stream].base)
-      fifo->stream[info->stream].base = info->ts;
+   if (fifo->base > info->ts)
+      return;
 
    const uint64_t rate = 1e9 / (info->stream == STREAM_VIDEO ? info->video.fps : info->audio.rate);
-   const uint64_t pts = (info->ts - fifo->stream[info->stream].base) / rate;
+   const uint64_t pts = (info->ts - fifo->base) / rate;
 
    uint8_t frame[] = {
       info->stream,
