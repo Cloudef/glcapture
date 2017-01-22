@@ -397,6 +397,7 @@ snd_pcm_sframes_t
 snd_pcm_writen(snd_pcm_t *pcm, void **bufs, snd_pcm_uframes_t size)
 {
    HOOK(_snd_pcm_writen);
+   // FIXME: Implement
    return _snd_pcm_writen(pcm, bufs, size);
 }
 
@@ -412,6 +413,7 @@ snd_pcm_sframes_t
 snd_pcm_mmap_writen(snd_pcm_t *pcm, void **bufs, snd_pcm_uframes_t size)
 {
    HOOK(_snd_pcm_mmap_writen);
+   // FIXME: Implement
    return _snd_pcm_mmap_writen(pcm, bufs, size);
 }
 
