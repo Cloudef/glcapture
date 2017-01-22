@@ -51,8 +51,8 @@ static void* store_real_symbol_and_return_fake_symbol(const char *symbol, void *
 
 // Some tunables
 // XXX: Make these configurable
-#define NUM_PBOS 2
-static double FPS = 60.0; // Probably not needed, we can calculate this
+#define NUM_PBOS 2 // Use any amount you want as long as you have vram
+static double FPS = 60.0; // Map this to the highest FPS in your program, currently glcapture does not drop frames
 static double SPEED_HACK = 1.0;
 static const char *FIFO_PATH = "/tmp/glcapture.fifo";
 
