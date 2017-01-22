@@ -1,8 +1,15 @@
-/* gcc -std=c99 -fPIC -shared -Wl,-soname,glcapture.so glcapture.c -o glcapture.so
- * gcc -m32 -std=c99 -fPIC -shared -Wl,-soname,glcapture.so glcapture.c -o glcapture.so (for 32bit)
+/* gcc -std=c99 -fPIC -shared -Wl,-soname,glcapture.so glcapture.c -lasound -o glcapture.so
+ * gcc -m32 -std=c99 -fPIC -shared -Wl,-soname,glcapture.so glcapture.c -lasound -o glcapture.so (for 32bit)
  *
- * Capture OpenGL framebuffer and ALSA audio and pipe them to ffmpeg
+ * Capture OpenGL framebuffer, ALSA audio and push them through named pipe
  * Usage: LD_PRELOAD="/path/to/glcapture.so" ./program
+ *
+ * https://github.com/Cloudef/FFmpeg/tree/rawmux
+ * ^ Compile this branch of ffmpeg to get rawmux decoder
+ * You can test that it works by doing ./ffplay /tmp/glcapture.fifo
+ *
+ * Make sure you increase your maximum pipe size /prox/sys/fs/pipe-max-size
+ * to minimum of 15 * (width * height * 3)
  */
 
 #define _GNU_SOURCE
@@ -44,7 +51,7 @@ static void* store_real_symbol_and_return_fake_symbol(const char *symbol, void *
 // Some tunables
 // XXX: Make these configurable
 #define NUM_PBOS 2
-static double FPS = 60.0;
+static double FPS = 60.0; // Probably not needed, we can calculate this
 static double SPEED_HACK = 1.0;
 static const char *FIFO_PATH = "/tmp/glcapture.fifo";
 
