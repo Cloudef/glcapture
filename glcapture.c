@@ -229,10 +229,20 @@ alsa_get_format(const snd_pcm_format_t format)
       case SND_PCM_FORMAT_FLOAT_BE: return "f32be";
       case SND_PCM_FORMAT_S32_LE: return "s32le";
       case SND_PCM_FORMAT_S32_BE: return "s32be";
+      case SND_PCM_FORMAT_U32_LE: return "u32le";
+      case SND_PCM_FORMAT_U32_BE: return "u32be";
       case SND_PCM_FORMAT_S24_LE: return "s24le";
       case SND_PCM_FORMAT_S24_BE: return "s24be";
+      case SND_PCM_FORMAT_U24_LE: return "u24le";
+      case SND_PCM_FORMAT_U24_BE: return "u24be";
       case SND_PCM_FORMAT_S16_LE: return "s16le";
       case SND_PCM_FORMAT_S16_BE: return "s16be";
+      case SND_PCM_FORMAT_U16_LE: return "u16le";
+      case SND_PCM_FORMAT_U16_BE: return "u16be";
+      case SND_PCM_FORMAT_S8: return "s8";
+      case SND_PCM_FORMAT_U8: return "u8";
+      case SND_PCM_FORMAT_MU_LAW: return "mulaw";
+      case SND_PCM_FORMAT_A_LAW: return "alaw";
       default: break;
    }
 
