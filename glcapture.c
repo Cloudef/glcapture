@@ -148,7 +148,8 @@ write_data_unsafe(struct fifo *fifo, const struct frame_info *info, const void *
 
       uint8_t header[255] = { 'r', 'a', 'w', 'm', 'u', 'x' };
 
-      if (strlen(info->video.format) + strlen(info->audio.format) + 31 > sizeof(header)) {
+      if (strlen(fifo->stream[STREAM_VIDEO].info.video.format) +
+          strlen(fifo->stream[STREAM_AUDIO].info.audio.format) + 32 > sizeof(header)) {
          warnx("something went wrong");
          reset_fifo(fifo);
          return;
