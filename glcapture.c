@@ -23,6 +23,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <assert.h>
 #include <time.h>
 #include <err.h>
 #include <pthread.h>
@@ -116,9 +117,30 @@ reset_fifo(struct fifo *fifo)
    WARNX("reseting fifo");
 }
 
+static bool
+stream_info_changed(const struct frame_info *current, const struct frame_info *last)
+{
+   assert(current->stream == last->stream);
+
+   if (current->stream == STREAM_VIDEO) {
+      return (current->video.format != last->video.format ||
+              current->video.width != last->video.width ||
+              current->video.height != last->video.height);
+   }
+
+   return (current->audio.format != last->audio.format ||
+           current->audio.rate != last->audio.rate ||
+           current->audio.channels != last->audio.channels);
+}
+
 static void
 write_data_unsafe(struct fifo *fifo, const struct frame_info *info, const void *buffer, const size_t size)
 {
+   if (fifo->stream[info->stream].ready && stream_info_changed(info, &fifo->stream[info->stream].info)) {
+      WARNX("stream information has changed");
+      reset_fifo(fifo);
+   }
+
    fifo->stream[info->stream].info = *info;
    fifo->stream[info->stream].ready = true;
 
@@ -126,9 +148,6 @@ write_data_unsafe(struct fifo *fifo, const struct frame_info *info, const void *
       if (!fifo->stream[i].ready)
          return;
    }
-
-   if (memcmp(info, &fifo->stream[info->stream].info, sizeof(*info)))
-      reset_fifo(fifo);
 
    if (!fifo->created) {
       remove(FIFO_PATH);
