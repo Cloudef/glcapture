@@ -10,6 +10,8 @@
  *
  * Make sure you increase your maximum pipe size /prox/sys/fs/pipe-max-size
  * to minimum of 15 * (width * height * 3)
+ *
+ * If you get xruns from alsa, consider increasing your audio buffer size.
  */
 
 #define _GNU_SOURCE
@@ -51,9 +53,18 @@ static void* store_real_symbol_and_return_fake_symbol(const char *symbol, void *
 
 // Some tunables
 // XXX: Make these configurable
-#define NUM_PBOS 2 // Use any amount you want as long as you have vram
-static double FPS = 60.0; // Map this to the highest FPS in your program, currently glcapture does not drop frames
+
+// Use any amount you want as long as you have the vram for it
+#define NUM_PBOS 2
+
+// Target framerate for the video stream
+// FIXME: Currently glcapture does not drop frames, if going over the target framerate
+static double FPS = 60.0;
+
+// Multiplier for system clock (MONOTONIC, RAW) can be used to make recordings of replays smoother (or speed hack)
 static double SPEED_HACK = 1.0;
+
+// Path for the fifo where glcapture will output the rawmux data
 static const char *FIFO_PATH = "/tmp/glcapture.fifo";
 
 enum stream {
