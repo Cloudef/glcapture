@@ -32,25 +32,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
-static void* (*_dlsym)(void*, const char*) = NULL;
-static void (*_glXSwapBuffers)(Display*, GLXDrawable) = NULL;
-static void* (*_glXGetProcAddress)(const GLubyte*) = NULL;
-static void* (*_glXGetProcAddressARB)(const GLubyte*) = NULL;
-static void* (*_glXGetProcAddressEXT)(const GLubyte*) = NULL;
-static snd_pcm_sframes_t (*_snd_pcm_writei)(snd_pcm_t *pcm, const void *buffer, snd_pcm_uframes_t size) = NULL;
-static snd_pcm_sframes_t (*_snd_pcm_writen)(snd_pcm_t *pcm, void **bufs, snd_pcm_uframes_t size) = NULL;
-static snd_pcm_sframes_t (*_snd_pcm_mmap_writei)(snd_pcm_t *pcm, const void *buffer, snd_pcm_uframes_t size) = NULL;
-static snd_pcm_sframes_t (*_snd_pcm_mmap_writen)(snd_pcm_t *pcm, void **bufs, snd_pcm_uframes_t size) = NULL;
-static int (*_clock_gettime)(clockid_t clk_id, struct timespec *tp) = NULL;
-static void* store_real_symbol_and_return_fake_symbol(const char *symbol, void *ret);
-
-#define WARN(x, ...) do { warn("glcapture: "x, ##__VA_ARGS__); } while (0)
-#define WARNX(x, ...) do { warnx("glcapture: "x, ##__VA_ARGS__); } while (0)
-#define WARN_ONCE(x, ...) do { static bool o = false; if (!o) { WARNX(x, ##__VA_ARGS__); o = true; } } while (0)
-#define HOOK_DLSYM(x, y) if (!x) { if ((x = dlvsym(RTLD_NEXT, __func__, "GLIBC_2.0"))) WARNX("HOOK dlsym"); }
-#define HOOK(x) if (!x) if ((x = _dlsym(RTLD_NEXT, __func__))) { WARNX("HOOK %s", __func__); }
-#define SET_IF_NOT_HOOKED(x, y) if (!x) { x = y; WARNX("SET %s", #x); }
-
 // Some tunables
 // XXX: Make these configurable
 
@@ -116,9 +97,29 @@ struct fifo {
    bool created;
 };
 
+static void* (*_dlsym)(void*, const char*) = NULL;
+static void (*_glXSwapBuffers)(Display*, GLXDrawable) = NULL;
+static void* (*_glXGetProcAddress)(const GLubyte*) = NULL;
+static void* (*_glXGetProcAddressARB)(const GLubyte*) = NULL;
+static void* (*_glXGetProcAddressEXT)(const GLubyte*) = NULL;
+static snd_pcm_sframes_t (*_snd_pcm_writei)(snd_pcm_t *pcm, const void *buffer, snd_pcm_uframes_t size) = NULL;
+static snd_pcm_sframes_t (*_snd_pcm_writen)(snd_pcm_t *pcm, void **bufs, snd_pcm_uframes_t size) = NULL;
+static snd_pcm_sframes_t (*_snd_pcm_mmap_writei)(snd_pcm_t *pcm, const void *buffer, snd_pcm_uframes_t size) = NULL;
+static snd_pcm_sframes_t (*_snd_pcm_mmap_writen)(snd_pcm_t *pcm, void **bufs, snd_pcm_uframes_t size) = NULL;
+static int (*_clock_gettime)(clockid_t clk_id, struct timespec *tp) = NULL;
+static void* store_real_symbol_and_return_fake_symbol(const char *symbol, void *ret);
+static void hook_function(void **ptr, const char *name, const bool versioned);
+
+#define WARN(x, ...) do { warn("glcapture: "x, ##__VA_ARGS__); } while (0)
+#define WARNX(x, ...) do { warnx("glcapture: "x, ##__VA_ARGS__); } while (0)
+#define ERRX(x, y, ...) do { errx(x, "glcapture: "y, ##__VA_ARGS__); } while (0)
+#define WARN_ONCE(x, ...) do { static bool o = false; if (!o) { WARNX(x, ##__VA_ARGS__); o = true; } } while (0)
+#define HOOK(x) hook_function((void**)&_##x, #x, false)
+
 static uint64_t get_time_ns(void)
 {
    struct timespec ts;
+   HOOK(clock_gettime);
    _clock_gettime(CLOCK_MONOTONIC, &ts);
    return (uint64_t)ts.tv_sec * (uint64_t)1e9 + (uint64_t)ts.tv_nsec;
 }
@@ -441,7 +442,7 @@ draw_indicator(const GLint view[4])
 void
 glXSwapBuffers(Display *dpy, GLXDrawable drawable)
 {
-   HOOK(_glXSwapBuffers);
+   HOOK(glXSwapBuffers);
 
    GLint view[4] = {0};
    static __thread struct gl gl;
@@ -461,28 +462,28 @@ glXSwapBuffers(Display *dpy, GLXDrawable drawable)
 __GLXextFuncPtr
 glXGetProcAddressEXT(const GLubyte *procname)
 {
-   HOOK(_glXGetProcAddressEXT);
+   HOOK(glXGetProcAddressEXT);
    return (_glXGetProcAddressEXT ? store_real_symbol_and_return_fake_symbol((const char*)procname, _glXGetProcAddressEXT(procname)) : NULL);
 }
 
 __GLXextFuncPtr
 glXGetProcAddressARB(const GLubyte *procname)
 {
-   HOOK(_glXGetProcAddressARB);
+   HOOK(glXGetProcAddressARB);
    return (_glXGetProcAddressARB ? store_real_symbol_and_return_fake_symbol((const char*)procname, _glXGetProcAddressARB(procname)) : NULL);
 }
 
 __GLXextFuncPtr
 glXGetProcAddress(const GLubyte *procname)
 {
-   HOOK(_glXGetProcAddress);
+   HOOK(glXGetProcAddress);
    return (_glXGetProcAddress ? store_real_symbol_and_return_fake_symbol((const char*)procname, _glXGetProcAddress(procname)) : NULL);
 }
 
 snd_pcm_sframes_t
 snd_pcm_writei(snd_pcm_t *pcm, const void *buffer, snd_pcm_uframes_t size)
 {
-   HOOK(_snd_pcm_writei);
+   HOOK(snd_pcm_writei);
    alsa_writei(pcm, buffer, size, __func__);
    return _snd_pcm_writei(pcm, buffer, size);
 }
@@ -490,7 +491,7 @@ snd_pcm_writei(snd_pcm_t *pcm, const void *buffer, snd_pcm_uframes_t size)
 snd_pcm_sframes_t
 snd_pcm_writen(snd_pcm_t *pcm, void **bufs, snd_pcm_uframes_t size)
 {
-   HOOK(_snd_pcm_writen);
+   HOOK(snd_pcm_writen);
    // FIXME: Implement
    return _snd_pcm_writen(pcm, bufs, size);
 }
@@ -498,7 +499,7 @@ snd_pcm_writen(snd_pcm_t *pcm, void **bufs, snd_pcm_uframes_t size)
 snd_pcm_sframes_t
 snd_pcm_mmap_writei(snd_pcm_t *pcm, const void *buffer, snd_pcm_uframes_t size)
 {
-   HOOK(_snd_pcm_mmap_writei);
+   HOOK(snd_pcm_mmap_writei);
    alsa_writei(pcm, buffer, size, __func__);
    return _snd_pcm_mmap_writei(pcm, buffer, size);
 }
@@ -506,7 +507,7 @@ snd_pcm_mmap_writei(snd_pcm_t *pcm, const void *buffer, snd_pcm_uframes_t size)
 snd_pcm_sframes_t
 snd_pcm_mmap_writen(snd_pcm_t *pcm, void **bufs, snd_pcm_uframes_t size)
 {
-   HOOK(_snd_pcm_mmap_writen);
+   HOOK(snd_pcm_mmap_writen);
    // FIXME: Implement
    return _snd_pcm_mmap_writen(pcm, bufs, size);
 }
@@ -514,7 +515,7 @@ snd_pcm_mmap_writen(snd_pcm_t *pcm, void **bufs, snd_pcm_uframes_t size)
 int
 clock_gettime(clockid_t clk_id, struct timespec *tp)
 {
-   HOOK(_clock_gettime);
+   HOOK(clock_gettime);
 
    if ((clk_id == CLOCK_MONOTONIC || clk_id == CLOCK_MONOTONIC_RAW)) {
       static __thread uint64_t base;
@@ -529,51 +530,60 @@ clock_gettime(clockid_t clk_id, struct timespec *tp)
    return _clock_gettime(clk_id, tp);
 }
 
-void*
-store_real_symbol_and_return_fake_symbol(const char *symbol, void *ret)
-{
-   if (!ret || !symbol)
-      return ret;
-
-   if (!strcmp(symbol, "glXSwapBuffers")) {
-      SET_IF_NOT_HOOKED(_glXSwapBuffers, ret);
-      return glXSwapBuffers;
-   } else if (!strcmp(symbol, "glXGetProcAddressEXT")) {
-      SET_IF_NOT_HOOKED(_glXGetProcAddressEXT, ret);
-      return glXGetProcAddressEXT;
-   } else if (!strcmp(symbol, "glXGetProcAddressARB")) {
-      SET_IF_NOT_HOOKED(_glXGetProcAddressARB, ret);
-      return glXGetProcAddressARB;
-   } else if (!strcmp(symbol, "glXGetProcAddress")) {
-      SET_IF_NOT_HOOKED(_glXGetProcAddress, ret);
-      return glXGetProcAddress;
-   } else if (!strcmp(symbol, "snd_pcm_writei")) {
-      SET_IF_NOT_HOOKED(_snd_pcm_writei, ret);
-      return snd_pcm_writei;
-   } else if (!strcmp(symbol, "snd_pcm_writen")) {
-      SET_IF_NOT_HOOKED(_snd_pcm_writen, ret);
-      return snd_pcm_writen;
-   } else if (!strcmp(symbol, "snd_pcm_mmap_writei")) {
-      SET_IF_NOT_HOOKED(_snd_pcm_mmap_writei, ret);
-      return snd_pcm_mmap_writei;
-   } else if (!strcmp(symbol, "snd_pcm_mmap_writen")) {
-      SET_IF_NOT_HOOKED(_snd_pcm_mmap_writen, ret);
-      return snd_pcm_mmap_writen;
-   } else if (!strcmp(symbol, "clock_gettime")) {
-      SET_IF_NOT_HOOKED(_clock_gettime, ret);
-      return clock_gettime;
-   }
-
-   return ret;
-}
+#define HOOK_DLSYM(x) hook_function((void**)&_##x, #x, true)
 
 void*
 dlsym(void *handle, const char *symbol)
 {
-   HOOK_DLSYM(_dlsym, dlsym);
+   HOOK_DLSYM(dlsym);
 
    if (!strcmp(symbol, "dlsym"))
       return dlsym;
 
    return store_real_symbol_and_return_fake_symbol(symbol, _dlsym(handle, symbol));
+}
+
+static void*
+store_real_symbol_and_return_fake_symbol(const char *symbol, void *ret)
+{
+   if (!ret || !symbol)
+      return ret;
+
+   if (0) {}
+#define SET_IF_NOT_HOOKED(x, y) do { if (!_##x) { _##x = y; WARNX("SET %s to %p", #x, y); } } while (0)
+#define FAKE_SYMBOL(x) else if (!strcmp(symbol, #x)) { SET_IF_NOT_HOOKED(x, ret); return x; }
+   FAKE_SYMBOL(glXSwapBuffers)
+   FAKE_SYMBOL(glXGetProcAddressEXT)
+   FAKE_SYMBOL(glXGetProcAddressARB)
+   FAKE_SYMBOL(glXGetProcAddress)
+   FAKE_SYMBOL(snd_pcm_writei)
+   FAKE_SYMBOL(snd_pcm_writen)
+   FAKE_SYMBOL(snd_pcm_mmap_writei)
+   FAKE_SYMBOL(snd_pcm_mmap_writen)
+   FAKE_SYMBOL(clock_gettime)
+#undef FAKE_SYMBOL
+#undef SET_IF_NOT_HOOKED
+
+   return ret;
+}
+
+static void
+hook_function(void **ptr, const char *name, const bool versioned)
+{
+   if (*ptr)
+      return;
+
+   if (versioned) {
+      const char *versions[] = { "GLIBC_2.0", "GLIBC_2.2.5", NULL };
+      for (size_t i = 0; !*ptr && versions[i]; ++i)
+         *ptr = dlvsym(RTLD_NEXT, name, versions[i]);
+   } else {
+      HOOK_DLSYM(dlsym);
+      *ptr = _dlsym(RTLD_NEXT, name);
+   }
+
+   if (!*ptr)
+      ERRX(EXIT_FAILURE, "HOOK FAIL %s", name);
+
+   WARNX("HOOK %s", name);
 }
