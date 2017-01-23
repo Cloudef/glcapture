@@ -129,6 +129,42 @@ reset_fifo(struct fifo *fifo)
 }
 
 static bool
+write_rawmux_header(struct fifo *fifo)
+{
+   uint8_t header[255] = { 'r', 'a', 'w', 'm', 'u', 'x' };
+
+   if (strlen(fifo->stream[STREAM_VIDEO].info.video.format) +
+       strlen(fifo->stream[STREAM_AUDIO].info.audio.format) + 33 > sizeof(header)) {
+      warnx("something went wrong");
+      reset_fifo(fifo);
+      return false;
+   }
+
+   uint8_t *p = header + 6;
+   memcpy(p, (uint8_t[]){1}, sizeof(uint8_t)); p += 1;
+
+   {
+      const struct frame_info *info = &fifo->stream[STREAM_VIDEO].info;
+      memcpy(p, (uint8_t[]){1}, sizeof(uint8_t)); p += 1;
+      memcpy(p, info->video.format, strlen(info->video.format)); p += strlen(info->video.format) + 1;
+      memcpy(p, (uint32_t[]){1}, sizeof(uint32_t)); p += 4;
+      memcpy(p, (uint32_t[]){info->video.fps * 1000}, sizeof(uint32_t)); p += 4;
+      memcpy(p, &info->video.width, sizeof(uint32_t)); p += 4;
+      memcpy(p, &info->video.height, sizeof(uint32_t)); p += 4;
+   }
+
+   {
+      const struct frame_info *info = &fifo->stream[STREAM_AUDIO].info;
+      memcpy(p, (uint8_t[]){2}, sizeof(uint8_t)); p += 1;
+      memcpy(p, info->audio.format, strlen(info->audio.format)); p += strlen(info->audio.format) + 1;
+      memcpy(p, &info->audio.rate, sizeof(info->audio.rate)); p += 4;
+      memcpy(p, &info->audio.channels, sizeof(info->audio.channels)); p += 1;
+   }
+
+   return (write(fifo->fd, header, (p + 1) - header) == (p + 1) - header);
+}
+
+static bool
 stream_info_changed(const struct frame_info *current, const struct frame_info *last)
 {
    assert(current->stream == last->stream);
@@ -144,8 +180,8 @@ stream_info_changed(const struct frame_info *current, const struct frame_info *l
            current->audio.channels != last->audio.channels);
 }
 
-static void
-write_data_unsafe(struct fifo *fifo, const struct frame_info *info, const void *buffer, const size_t size)
+static bool
+check_and_prepare_stream(struct fifo *fifo, const struct frame_info *info)
 {
    if (fifo->stream[info->stream].ready && stream_info_changed(info, &fifo->stream[info->stream].info)) {
       WARNX("stream information has changed");
@@ -157,64 +193,49 @@ write_data_unsafe(struct fifo *fifo, const struct frame_info *info, const void *
 
    for (enum stream i = 0; i < STREAM_LAST; ++i) {
       if (!fifo->stream[i].ready)
-         return;
+         return false;
    }
 
    if (!fifo->created) {
       remove(FIFO_PATH);
 
       if (!(fifo->created = !mkfifo(FIFO_PATH, 0666)))
-         return;
+         return false;
 
       fifo->created = true;
    }
 
    if (fifo->fd < 0) {
       if ((fifo->fd = open(FIFO_PATH, O_WRONLY | O_NONBLOCK | O_CLOEXEC)) < 0)
-         return;
+         return false;
 
       const int flags = fcntl(fifo->fd, F_GETFL);
       fcntl(fifo->fd, F_SETFL, flags & ~O_NONBLOCK);
-
-      uint8_t header[255] = { 'r', 'a', 'w', 'm', 'u', 'x' };
-
-      if (strlen(fifo->stream[STREAM_VIDEO].info.video.format) +
-          strlen(fifo->stream[STREAM_AUDIO].info.audio.format) + 32 > sizeof(header)) {
-         warnx("something went wrong");
-         reset_fifo(fifo);
-         return;
-      }
-
-      uint8_t *p = header + 6;
-
-      {
-         const struct frame_info *info = &fifo->stream[STREAM_VIDEO].info;
-         memcpy(p, (uint8_t[]){1}, sizeof(uint8_t)); p += 1;
-         memcpy(p, info->video.format, strlen(info->video.format)); p += strlen(info->video.format) + 1;
-         memcpy(p, (uint32_t[]){1}, sizeof(uint32_t)); p += 4;
-         memcpy(p, (uint32_t[]){info->video.fps}, sizeof(uint32_t)); p += 4;
-         memcpy(p, &info->video.width, sizeof(uint32_t)); p += 4;
-         memcpy(p, &info->video.height, sizeof(uint32_t)); p += 4;
-      }
-
-      {
-         const struct frame_info *info = &fifo->stream[STREAM_AUDIO].info;
-         memcpy(p, (uint8_t[]){2}, sizeof(uint8_t)); p += 1;
-         memcpy(p, info->audio.format, strlen(info->audio.format)); p += strlen(info->audio.format) + 1;
-         memcpy(p, &info->audio.rate, sizeof(info->audio.rate)); p += 4;
-         memcpy(p, &info->audio.channels, sizeof(info->audio.channels)); p += 1;
-      }
-
       WARNX("stream ready, writing headers");
-      write(fifo->fd, header, (p + 1) - header);
+
+      if (!write_rawmux_header(fifo))
+         return false;
+
       fifo->base = get_time_ns();
    }
 
-   if (fifo->base > info->ts)
+   return true;
+}
+
+static void
+write_data_unsafe(struct fifo *fifo, const struct frame_info *info, const void *buffer, const size_t size)
+{
+   if (!check_and_prepare_stream(fifo, info))
       return;
 
-   const uint64_t rate = 1e9 / (info->stream == STREAM_VIDEO ? info->video.fps : info->audio.rate);
-   const uint64_t pts = (info->ts - fifo->base) / rate;
+   const uint64_t ts = (fifo->base > info->ts ? fifo->base : info->ts);
+   const uint64_t den[STREAM_LAST] = { 1e6, 1e9 };
+   const uint64_t rate = (info->stream == STREAM_VIDEO ? info->video.fps : info->audio.rate);
+   const uint64_t pts = (ts - fifo->base) / (den[info->stream] / rate);
+
+#if 0
+   WARNX("PTS: (%u) %llu", info->stream, pts);
+#endif
 
    uint8_t frame[] = {
       info->stream,
@@ -225,16 +246,25 @@ write_data_unsafe(struct fifo *fifo, const struct frame_info *info, const void *
    memcpy(frame + 1, (uint32_t[]){size}, sizeof(uint32_t));
    memcpy(frame + 1 + 4, (uint64_t[]){pts}, sizeof(uint64_t));
 
-   if (fifo->size < size) {
-      fcntl(fifo->fd, F_SETPIPE_SZ, 15 * (size + sizeof(frame)));
-      fifo->size = size;
+   {
+      const size_t pipe_sz = (FPS / 4) * (size + sizeof(frame));
+
+      if (fifo->size < pipe_sz) {
+         if (fcntl(fifo->fd, F_SETPIPE_SZ, pipe_sz) == -1) {
+            WARN("fcntl(F_SETPIPE_SZ, %zu) (%u)", pipe_sz, info->stream);
+            reset_fifo(fifo);
+            return;
+         }
+
+         fifo->size = pipe_sz;
+      }
    }
 
    errno = 0;
    ssize_t ret;
    if ((ret = write(fifo->fd, frame, sizeof(frame)) != (ssize_t)sizeof(frame)) ||
-       ((ret = write(fifo->fd, buffer, size)) != (ssize_t)size)) {
-      WARN("write() == %zu", ret);
+      ((ret = write(fifo->fd, buffer, size)) != (ssize_t)size)) {
+      WARN("write(%zu) (%u)", ret, info->stream);
       reset_fifo(fifo);
    }
 }
