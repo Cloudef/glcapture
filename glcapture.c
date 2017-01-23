@@ -334,7 +334,7 @@ capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
    } frame = {
       // XXX: Maybe on ES we should instead modify the data and remove A component?
       //      Would save some transmission bandwidth at least
-      .video = (OPENGL_VARIANT == OPENGL_ES ? "rgba" : "rgb"),
+      .video = (OPENGL_VARIANT == OPENGL_ES ? "rgb0" : "rgb"),
       .format = (OPENGL_VARIANT == OPENGL_ES ? GL_RGBA : GL_RGB),
       .components = (OPENGL_VARIANT == OPENGL_ES ? 4 : 3),
    };
