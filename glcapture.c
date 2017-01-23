@@ -345,28 +345,26 @@ alsa_writei(snd_pcm_t *pcm, const void *buffer, const snd_pcm_uframes_t size, co
 static void
 capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
 {
-   {
-      if (!glIsBuffer(gl->pbo[gl->active].obj)) {
-         WARNX("create pbo %u", gl->active);
-         glGenBuffers(1, &gl->pbo[gl->active].obj);
-      }
-
-      glBindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[gl->active].obj);
-      glBufferData(GL_PIXEL_PACK_BUFFER, view[2] * view[3] * 3, NULL, GL_STREAM_READ);
-
-      glPushClientAttrib(GL_CLIENT_PIXEL_STORE_BIT);
-      glPixelStorei(GL_PACK_ALIGNMENT, 1);
-      glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-      glPixelStorei(GL_PACK_IMAGE_HEIGHT, 0);
-      glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
-      glReadPixels(view[0], view[1], view[2], view[3], GL_RGB, GL_UNSIGNED_BYTE, NULL);
-      glPopClientAttrib();
-
-      gl->pbo[gl->active].ts = ts;
-      gl->pbo[gl->active].width = view[2];
-      gl->pbo[gl->active].height = view[3];
-      gl->pbo[gl->active].written = true;
+   if (!glIsBuffer(gl->pbo[gl->active].obj)) {
+      WARNX("create pbo %u", gl->active);
+      glGenBuffers(1, &gl->pbo[gl->active].obj);
    }
+
+   glBindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[gl->active].obj);
+   glBufferData(GL_PIXEL_PACK_BUFFER, view[2] * view[3] * 3, NULL, GL_STREAM_READ);
+
+   glPushClientAttrib(GL_CLIENT_PIXEL_STORE_BIT);
+   glPixelStorei(GL_PACK_ALIGNMENT, 1);
+   glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+   glPixelStorei(GL_PACK_IMAGE_HEIGHT, 0);
+   glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+   glReadPixels(view[0], view[1], view[2], view[3], GL_RGB, GL_UNSIGNED_BYTE, NULL);
+   glPopClientAttrib();
+
+   gl->pbo[gl->active].ts = ts;
+   gl->pbo[gl->active].width = view[2];
+   gl->pbo[gl->active].height = view[3];
+   gl->pbo[gl->active].written = true;
 
    gl->active = (gl->active + 1) % NUM_PBOS;
 
