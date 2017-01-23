@@ -18,6 +18,7 @@
 #define GL_GLEXT_PROTOTYPES
 #include <dlfcn.h>
 #include <GL/glx.h>
+#include <EGL/egl.h>
 #include <alsa/asoundlib.h>
 #include <stdlib.h>
 #include <string.h>
@@ -98,17 +99,18 @@ struct fifo {
 };
 
 static void* (*_dlsym)(void*, const char*) = NULL;
+static EGLBoolean (*_eglSwapBuffers)(EGLDisplay, EGLSurface) = NULL;
+static __eglMustCastToProperFunctionPointerType (*_eglGetProcAddress)(const char*) = NULL;
 static void (*_glXSwapBuffers)(Display*, GLXDrawable) = NULL;
-static void* (*_glXGetProcAddress)(const GLubyte*) = NULL;
-static void* (*_glXGetProcAddressARB)(const GLubyte*) = NULL;
-static void* (*_glXGetProcAddressEXT)(const GLubyte*) = NULL;
-static snd_pcm_sframes_t (*_snd_pcm_writei)(snd_pcm_t *pcm, const void *buffer, snd_pcm_uframes_t size) = NULL;
-static snd_pcm_sframes_t (*_snd_pcm_writen)(snd_pcm_t *pcm, void **bufs, snd_pcm_uframes_t size) = NULL;
-static snd_pcm_sframes_t (*_snd_pcm_mmap_writei)(snd_pcm_t *pcm, const void *buffer, snd_pcm_uframes_t size) = NULL;
-static snd_pcm_sframes_t (*_snd_pcm_mmap_writen)(snd_pcm_t *pcm, void **bufs, snd_pcm_uframes_t size) = NULL;
-static int (*_clock_gettime)(clockid_t clk_id, struct timespec *tp) = NULL;
-static void* store_real_symbol_and_return_fake_symbol(const char *symbol, void *ret);
-static void hook_function(void **ptr, const char *name, const bool versioned);
+static __GLXextFuncPtr (*_glXGetProcAddress)(const GLubyte*) = NULL;
+static __GLXextFuncPtr (*_glXGetProcAddressARB)(const GLubyte*) = NULL;
+static snd_pcm_sframes_t (*_snd_pcm_writei)(snd_pcm_t*, const void*, snd_pcm_uframes_t) = NULL;
+static snd_pcm_sframes_t (*_snd_pcm_writen)(snd_pcm_t*, void**, snd_pcm_uframes_t) = NULL;
+static snd_pcm_sframes_t (*_snd_pcm_mmap_writei)(snd_pcm_t*, const void*, snd_pcm_uframes_t) = NULL;
+static snd_pcm_sframes_t (*_snd_pcm_mmap_writen)(snd_pcm_t*, void**, snd_pcm_uframes_t) = NULL;
+static int (*_clock_gettime)(clockid_t, struct timespec*) = NULL;
+static void* store_real_symbol_and_return_fake_symbol(const char*, void*);
+static void hook_function(void**, const char*, const bool);
 
 #define WARN(x, ...) do { warn("glcapture: "x, ##__VA_ARGS__); } while (0)
 #define WARNX(x, ...) do { warnx("glcapture: "x, ##__VA_ARGS__); } while (0)
@@ -439,11 +441,9 @@ draw_indicator(const GLint view[4])
    glPopAttrib();
 }
 
-void
-glXSwapBuffers(Display *dpy, GLXDrawable drawable)
+static void
+swap_buffers(void)
 {
-   HOOK(glXSwapBuffers);
-
    GLint view[4] = {0};
    static __thread struct gl gl;
    const GLenum error0 = glGetError();
@@ -455,15 +455,29 @@ glXSwapBuffers(Display *dpy, GLXDrawable drawable)
       WARNX("glError occured");
       reset_capture(&gl);
    }
-
-   _glXSwapBuffers(dpy, drawable);
 }
 
-__GLXextFuncPtr
-glXGetProcAddressEXT(const GLubyte *procname)
+EGLBoolean
+eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
 {
-   HOOK(glXGetProcAddressEXT);
-   return (_glXGetProcAddressEXT ? store_real_symbol_and_return_fake_symbol((const char*)procname, _glXGetProcAddressEXT(procname)) : NULL);
+   HOOK(eglSwapBuffers);
+   swap_buffers();
+   return _eglSwapBuffers(dpy, surface);
+}
+
+__eglMustCastToProperFunctionPointerType
+eglGetProcAddress(const char *procname)
+{
+   HOOK(eglGetProcAddress);
+   return (_eglGetProcAddress ? store_real_symbol_and_return_fake_symbol(procname, _eglGetProcAddress(procname)) : NULL);
+}
+
+void
+glXSwapBuffers(Display *dpy, GLXDrawable drawable)
+{
+   HOOK(glXSwapBuffers);
+   swap_buffers();
+   _glXSwapBuffers(dpy, drawable);
 }
 
 __GLXextFuncPtr
@@ -552,8 +566,9 @@ store_real_symbol_and_return_fake_symbol(const char *symbol, void *ret)
    if (0) {}
 #define SET_IF_NOT_HOOKED(x, y) do { if (!_##x) { _##x = y; WARNX("SET %s to %p", #x, y); } } while (0)
 #define FAKE_SYMBOL(x) else if (!strcmp(symbol, #x)) { SET_IF_NOT_HOOKED(x, ret); return x; }
+   FAKE_SYMBOL(eglSwapBuffers)
+   FAKE_SYMBOL(eglGetProcAddress)
    FAKE_SYMBOL(glXSwapBuffers)
-   FAKE_SYMBOL(glXGetProcAddressEXT)
    FAKE_SYMBOL(glXGetProcAddressARB)
    FAKE_SYMBOL(glXGetProcAddress)
    FAKE_SYMBOL(snd_pcm_writei)
