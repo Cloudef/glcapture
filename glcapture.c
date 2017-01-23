@@ -51,6 +51,9 @@ static bool DROP_FRAMES = true;
 // Multiplier for system clock (MONOTONIC, RAW) can be used to make recordings of replays smoother (or speed hack)
 static double SPEED_HACK = 1.0;
 
+// If your video is upside down set this to false
+static bool FLIP_VIDEO = true;
+
 // Path for the fifo where glcapture will output the rawmux data
 static const char *FIFO_PATH = "/tmp/glcapture.fifo";
 
@@ -70,12 +73,14 @@ static const bool ENABLED_STREAMS[STREAM_LAST] = {
 #define WARN(x, ...) do { warn("glcapture: "x, ##__VA_ARGS__); } while (0)
 #define WARNX(x, ...) do { warnx("glcapture: "x, ##__VA_ARGS__); } while (0)
 #define ERRX(x, y, ...) do { errx(x, "glcapture: "y, ##__VA_ARGS__); } while (0)
+#define ERR(x, y, ...) do { err(x, "glcapture: "y, ##__VA_ARGS__); } while (0)
 #define WARN_ONCE(x, ...) do { static bool o = false; if (!o) { WARNX(x, ##__VA_ARGS__); o = true; } } while (0)
 
 // "entrypoints" exposed to hooks.h
 static void swap_buffers(void);
 static void alsa_writei(snd_pcm_t *pcm, const void *buffer, const snd_pcm_uframes_t size, const char *caller);
 static uint64_t get_fake_time_ns(void);
+static __thread GLint LAST_FRAMEBUFFER_BLIT[8];
 
 #include "hooks.h"
 #include "glwrangle.h"
@@ -291,6 +296,34 @@ write_data(const struct frame_info *info, const void *buffer, const size_t size)
    pthread_mutex_unlock(&mutex);
 }
 
+void
+flip_pixels_if_needed(const GLint view[4], uint8_t *pixels, const uint32_t width, const uint32_t height, const uint8_t components)
+{
+   // Will detect at least wine which blits viewport sized framebuffer at the end already flipped
+   if (!FLIP_VIDEO ||
+       (LAST_FRAMEBUFFER_BLIT[0] == 0 && LAST_FRAMEBUFFER_BLIT[1] == 0 &&
+        LAST_FRAMEBUFFER_BLIT[2] == view[2] && LAST_FRAMEBUFFER_BLIT[3] == view[3] &&
+        LAST_FRAMEBUFFER_BLIT[4] == 0 && LAST_FRAMEBUFFER_BLIT[5] == view[3] &&
+        LAST_FRAMEBUFFER_BLIT[6] == view[2] && LAST_FRAMEBUFFER_BLIT[7] == 0))
+      return;
+
+   // Sadly I can't come up with any reliable way to do this on GPU on all possible OpenGL versions and variants.
+   const uint32_t stride = width * components;
+   static __thread struct { size_t size; uint8_t *data; } row;
+   if (row.size < stride) {
+      if (!(row.data = realloc(row.data, stride)))
+         ERR(EXIT_FAILURE, "realloc(%p, %u)", row.data, stride);
+
+      row.size = stride;
+   }
+
+   for (uint8_t *lo = pixels, *hi = pixels + (height - 1) * stride; lo < hi; lo += stride, hi -= stride) {
+      memcpy(row.data, lo, stride);
+      memcpy(lo, hi, stride);
+      memcpy(hi, row.data, stride);
+   }
+}
+
 static void
 capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
 {
@@ -348,10 +381,11 @@ capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
          .video.fps = FPS,
       };
 
-      const void *buf;
+      void *buf;
       const size_t size = info.video.width * info.video.height * frame.components;
       glBindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[gl->active].obj);
       if ((buf = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, size, GL_MAP_READ_BIT))) {
+         flip_pixels_if_needed(view, buf, info.video.width, info.video.height, frame.components);
          write_data(&info, buf, size);
          glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
          gl->pbo[gl->active].written = false;

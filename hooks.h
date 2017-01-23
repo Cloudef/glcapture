@@ -1,6 +1,7 @@
 #pragma once
 
 static void* (*_dlsym)(void*, const char*);
+static void (*_glBlitFramebuffer)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum);
 static EGLBoolean (*_eglSwapBuffers)(EGLDisplay, EGLSurface);
 static __eglMustCastToProperFunctionPointerType (*_eglGetProcAddress)(const char*);
 static void (*_glXSwapBuffers)(Display*, GLXDrawable);
@@ -15,6 +16,15 @@ static void* store_real_symbol_and_return_fake_symbol(const char*, void*);
 static void hook_function(void**, const char*, const bool);
 
 #define HOOK(x) hook_function((void**)&_##x, #x, false)
+
+void
+glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter)
+{
+   HOOK(glBlitFramebuffer);
+   const GLint a[] = { srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1 };
+   memcpy(LAST_FRAMEBUFFER_BLIT, a, sizeof(a));
+   _glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
+}
 
 EGLBoolean
 eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
@@ -109,6 +119,7 @@ store_real_symbol_and_return_fake_symbol(const char *symbol, void *ret)
    if (0) {}
 #define SET_IF_NOT_HOOKED(x, y) do { if (!_##x) { _##x = y; WARNX("SET %s to %p", #x, y); } } while (0)
 #define FAKE_SYMBOL(x) else if (!strcmp(symbol, #x)) { SET_IF_NOT_HOOKED(x, ret); return x; }
+   FAKE_SYMBOL(glBlitFramebuffer)
    FAKE_SYMBOL(eglSwapBuffers)
    FAKE_SYMBOL(eglGetProcAddress)
    FAKE_SYMBOL(glXSwapBuffers)
