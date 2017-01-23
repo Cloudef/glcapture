@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <signal.h>
 #include <unistd.h>
 #include <assert.h>
 #include <time.h>
@@ -214,6 +215,8 @@ check_and_prepare_stream(struct fifo *fifo, const struct frame_info *info)
    }
 
    if (fifo->fd < 0) {
+      signal(SIGPIPE, SIG_IGN);
+
       if ((fifo->fd = open(FIFO_PATH, O_WRONLY | O_NONBLOCK | O_CLOEXEC)) < 0)
          return false;
 
