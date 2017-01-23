@@ -16,15 +16,6 @@ static void hook_function(void**, const char*, const bool);
 
 #define HOOK(x) hook_function((void**)&_##x, #x, false)
 
-static uint64_t
-get_time_ns(void)
-{
-   struct timespec ts;
-   HOOK(clock_gettime);
-   _clock_gettime(CLOCK_MONOTONIC, &ts);
-   return (uint64_t)ts.tv_sec * (uint64_t)1e9 + (uint64_t)ts.tv_nsec;
-}
-
 EGLBoolean
 eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
 {
@@ -100,29 +91,13 @@ clock_gettime(clockid_t clk_id, struct timespec *tp)
    HOOK(clock_gettime);
 
    if ((clk_id == CLOCK_MONOTONIC || clk_id == CLOCK_MONOTONIC_RAW)) {
-      static __thread uint64_t base;
-      const uint64_t current = get_time_ns();
-      if (!base) base = current;
-      const uint64_t fake = base + (current - base) * SPEED_HACK;
+      const uint64_t fake = get_fake_time_ns();
       tp->tv_sec = fake / (uint64_t)1e9;
       tp->tv_nsec = (fake % (uint64_t)1e9);
       return 0;
    }
 
    return _clock_gettime(clk_id, tp);
-}
-
-#define HOOK_DLSYM(x) hook_function((void**)&_##x, #x, true)
-
-void*
-dlsym(void *handle, const char *symbol)
-{
-   HOOK_DLSYM(dlsym);
-
-   if (!strcmp(symbol, "dlsym"))
-      return dlsym;
-
-   return store_real_symbol_and_return_fake_symbol(symbol, _dlsym(handle, symbol));
 }
 
 static void*
@@ -150,6 +125,8 @@ store_real_symbol_and_return_fake_symbol(const char *symbol, void *ret)
    return ret;
 }
 
+#define HOOK_DLSYM(x) hook_function((void**)&_##x, #x, true)
+
 static void
 hook_function(void **ptr, const char *name, const bool versioned)
 {
@@ -170,3 +147,16 @@ hook_function(void **ptr, const char *name, const bool versioned)
 
    WARNX("HOOK %s", name);
 }
+
+void*
+dlsym(void *handle, const char *symbol)
+{
+   HOOK_DLSYM(dlsym);
+
+   if (!strcmp(symbol, "dlsym"))
+      return dlsym;
+
+   return store_real_symbol_and_return_fake_symbol(symbol, _dlsym(handle, symbol));
+}
+
+#undef HOOK_DLSYM

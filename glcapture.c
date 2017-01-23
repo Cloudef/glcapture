@@ -103,11 +103,22 @@ struct fifo {
 #define ERRX(x, y, ...) do { errx(x, "glcapture: "y, ##__VA_ARGS__); } while (0)
 #define WARN_ONCE(x, ...) do { static bool o = false; if (!o) { WARNX(x, ##__VA_ARGS__); o = true; } } while (0)
 
+// "entrypoints" exposed to hooks.h
 static void swap_buffers(void);
 static void alsa_writei(snd_pcm_t *pcm, const void *buffer, const snd_pcm_uframes_t size, const char *caller);
+static uint64_t get_fake_time_ns(void);
 
 #include "hooks.h"
 #include "glwrangle.h"
+
+static uint64_t
+get_time_ns(void)
+{
+   struct timespec ts;
+   HOOK(clock_gettime);
+   _clock_gettime(CLOCK_MONOTONIC, &ts);
+   return (uint64_t)ts.tv_sec * (uint64_t)1e9 + (uint64_t)ts.tv_nsec;
+}
 
 static void
 reset_fifo(struct fifo *fifo)
@@ -446,4 +457,13 @@ alsa_writei(snd_pcm_t *pcm, const void *buffer, const snd_pcm_uframes_t size, co
    struct frame_info info;
    if (alsa_get_frame_info(pcm, &info, caller))
       write_data(&info, buffer, snd_pcm_frames_to_bytes(pcm, size));
+}
+
+static uint64_t
+get_fake_time_ns(void)
+{
+   static __thread uint64_t base;
+   const uint64_t current = get_time_ns();
+   base = (base ? base : current);
+   return base + (current - base) * SPEED_HACK;
 }
