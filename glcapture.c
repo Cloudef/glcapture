@@ -8,17 +8,14 @@
  * ^ Compile this branch of ffmpeg to get rawmux decoder
  * You can test that it works by doing ./ffplay /tmp/glcapture.fifo
  *
- * Make sure you increase your maximum pipe size /prox/sys/fs/pipe-max-size
- * to minimum of (FPS / 4) * ((width * height * 3) + 13)
+ * Make sure you increase your maximum pipe size /prox/sys/fs/pipe-max-size to minimum of
+ * (FPS / 4) * ((width * height * components) + 13) where components is 3 on OpenGL and 4 on OpenGL ES.
  *
  * If you get xruns from alsa, consider increasing your audio buffer size.
  */
 
 #define _GNU_SOURCE
 #include <dlfcn.h>
-#include <GL/glx.h>
-#include <EGL/egl.h>
-#include <alsa/asoundlib.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -31,6 +28,10 @@
 #include <pthread.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+
+#include <GL/glx.h>
+#include <EGL/egl.h>
+#include <alsa/asoundlib.h>
 
 // Some tunables
 // XXX: Make these configurable
@@ -58,43 +59,10 @@ enum stream {
    STREAM_LAST,
 };
 
-struct pbo {
-   uint64_t ts;
-   uint32_t width, height;
-   GLuint obj;
-   bool written;
-};
-
-struct gl {
-   struct pbo pbo[NUM_PBOS];
-   uint8_t active; // pbo
-};
-
-struct frame_info {
-   union {
-      struct {
-         const char *format;
-         uint32_t width, height, fps;
-      } video;
-      struct {
-         const char *format;
-         uint32_t rate;
-         uint8_t channels;
-      } audio;
-   };
-   uint64_t ts;
-   enum stream stream;
-};
-
-struct fifo {
-   struct {
-      struct frame_info info;
-      bool ready;
-   } stream[STREAM_LAST];
-   uint64_t base;
-   size_t size;
-   int fd;
-   bool created;
+// Set to false to disable stream
+static const bool ENABLED_STREAMS[STREAM_LAST] = {
+   true, // STREAM_VIDEO
+   true, // STREAM_AUDIO
 };
 
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
@@ -110,6 +78,45 @@ static uint64_t get_fake_time_ns(void);
 
 #include "hooks.h"
 #include "glwrangle.h"
+
+struct pbo {
+   uint64_t ts;
+   uint32_t width, height;
+   GLuint obj;
+   bool written;
+};
+
+struct gl {
+   struct pbo pbo[NUM_PBOS];
+   uint8_t active; // pbo
+};
+
+struct frame_info {
+   union {
+      struct {
+         uint32_t width, height, fps;
+      } video;
+      struct {
+         uint32_t rate;
+         uint8_t channels;
+      } audio;
+   };
+
+   const char *format;
+   uint64_t ts;
+   enum stream stream;
+};
+
+struct fifo {
+   struct {
+      struct frame_info info;
+   } stream[STREAM_LAST];
+
+   uint64_t base;
+   size_t size;
+   int fd;
+   bool created;
+};
 
 static uint64_t
 get_time_ns(void)
@@ -134,8 +141,11 @@ write_rawmux_header(struct fifo *fifo)
 {
    uint8_t header[255] = { 'r', 'a', 'w', 'm', 'u', 'x' };
 
-   if (strlen(fifo->stream[STREAM_VIDEO].info.video.format) +
-       strlen(fifo->stream[STREAM_AUDIO].info.audio.format) + 33 > sizeof(header)) {
+   size_t variable_sz = 0;
+   for (enum stream i = 0; i < STREAM_LAST; ++i)
+      variable_sz += (fifo->stream[i].info.format ? strlen(fifo->stream[i].info.format) : 0);
+
+   if (variable_sz + 33 > sizeof(header)) {
       warnx("something went wrong");
       reset_fifo(fifo);
       return false;
@@ -144,20 +154,20 @@ write_rawmux_header(struct fifo *fifo)
    uint8_t *p = header + 6;
    memcpy(p, (uint8_t[]){1}, sizeof(uint8_t)); p += 1;
 
-   {
+   if (fifo->stream[STREAM_VIDEO].info.format) {
       const struct frame_info *info = &fifo->stream[STREAM_VIDEO].info;
       memcpy(p, (uint8_t[]){1}, sizeof(uint8_t)); p += 1;
-      memcpy(p, info->video.format, strlen(info->video.format)); p += strlen(info->video.format) + 1;
+      memcpy(p, info->format, strlen(info->format)); p += strlen(info->format) + 1;
       memcpy(p, (uint32_t[]){1}, sizeof(uint32_t)); p += 4;
       memcpy(p, (uint32_t[]){info->video.fps * 1000}, sizeof(uint32_t)); p += 4;
       memcpy(p, &info->video.width, sizeof(uint32_t)); p += 4;
       memcpy(p, &info->video.height, sizeof(uint32_t)); p += 4;
    }
 
-   {
+   if (fifo->stream[STREAM_AUDIO].info.format) {
       const struct frame_info *info = &fifo->stream[STREAM_AUDIO].info;
       memcpy(p, (uint8_t[]){2}, sizeof(uint8_t)); p += 1;
-      memcpy(p, info->audio.format, strlen(info->audio.format)); p += strlen(info->audio.format) + 1;
+      memcpy(p, info->format, strlen(info->format)); p += strlen(info->format) + 1;
       memcpy(p, &info->audio.rate, sizeof(info->audio.rate)); p += 4;
       memcpy(p, &info->audio.channels, sizeof(info->audio.channels)); p += 1;
    }
@@ -171,12 +181,12 @@ stream_info_changed(const struct frame_info *current, const struct frame_info *l
    assert(current->stream == last->stream);
 
    if (current->stream == STREAM_VIDEO) {
-      return (current->video.format != last->video.format ||
+      return (current->format != last->format ||
               current->video.width != last->video.width ||
               current->video.height != last->video.height);
    }
 
-   return (current->audio.format != last->audio.format ||
+   return (current->format != last->format ||
            current->audio.rate != last->audio.rate ||
            current->audio.channels != last->audio.channels);
 }
@@ -184,18 +194,15 @@ stream_info_changed(const struct frame_info *current, const struct frame_info *l
 static bool
 check_and_prepare_stream(struct fifo *fifo, const struct frame_info *info)
 {
-   if (fifo->stream[info->stream].ready && stream_info_changed(info, &fifo->stream[info->stream].info)) {
+   if (!ENABLED_STREAMS[info->stream])
+      return false;
+
+   if (fifo->stream[info->stream].info.format && stream_info_changed(info, &fifo->stream[info->stream].info)) {
       WARNX("stream information has changed");
       reset_fifo(fifo);
    }
 
    fifo->stream[info->stream].info = *info;
-   fifo->stream[info->stream].ready = true;
-
-   for (enum stream i = 0; i < STREAM_LAST; ++i) {
-      if (!fifo->stream[i].ready)
-         return false;
-   }
 
    if (!fifo->created) {
       remove(FIFO_PATH);
@@ -284,21 +291,42 @@ write_data(const struct frame_info *info, const void *buffer, const size_t size)
 static void
 capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
 {
+   const struct {
+      const char *video;
+      GLenum format;
+      uint8_t components;
+   } frame = {
+      // XXX: Maybe on ES we should instead modify the data and remove A component?
+      //      Would save some transmission bandwidth at least
+      .video = (OPENGL_VARIANT == OPENGL_ES ? "rgba" : "rgb"),
+      .format = (OPENGL_VARIANT == OPENGL_ES ? GL_RGBA : GL_RGB),
+      .components = (OPENGL_VARIANT == OPENGL_ES ? 4 : 3),
+   };
+
    if (!glIsBuffer(gl->pbo[gl->active].obj)) {
       WARNX("create pbo %u", gl->active);
       glGenBuffers(1, &gl->pbo[gl->active].obj);
    }
 
    glBindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[gl->active].obj);
-   glBufferData(GL_PIXEL_PACK_BUFFER, view[2] * view[3] * 3, NULL, GL_STREAM_READ);
+   glBufferData(GL_PIXEL_PACK_BUFFER, view[2] * view[3] * frame.components, NULL, GL_STREAM_READ);
 
-   glPushClientAttrib(GL_CLIENT_PIXEL_STORE_BIT);
-   glPixelStorei(GL_PACK_ALIGNMENT, 1);
-   glPixelStorei(GL_PACK_ROW_LENGTH, 0);
-   glPixelStorei(GL_PACK_IMAGE_HEIGHT, 0);
-   glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
-   glReadPixels(view[0], view[1], view[2], view[3], GL_RGB, GL_UNSIGNED_BYTE, NULL);
-   glPopClientAttrib();
+   struct { GLenum t; GLint o; GLint v; } map[] = {
+      { .t = GL_PACK_ALIGNMENT, .v = 1 },
+      { .t = GL_PACK_ROW_LENGTH },
+      { .t = GL_PACK_IMAGE_HEIGHT },
+      { .t = GL_PACK_SKIP_PIXELS },
+   };
+
+   for (size_t i = 0; i < ARRAY_SIZE(map); ++i) {
+      glGetIntegerv(map[i].t, &map[i].o);
+      glPixelStorei(map[i].t, map[i].v);
+   }
+
+   glReadPixels(view[0], view[1], view[2], view[3], frame.format, GL_UNSIGNED_BYTE, NULL);
+
+   for (size_t i = 0; i < ARRAY_SIZE(map); ++i)
+      glPixelStorei(map[i].t, map[i].o);
 
    gl->pbo[gl->active].ts = ts;
    gl->pbo[gl->active].width = view[2];
@@ -308,19 +336,20 @@ capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
    gl->active = (gl->active + 1) % NUM_PBOS;
 
    if (glIsBuffer(gl->pbo[gl->active].obj) && gl->pbo[gl->active].written) {
-      const void *buf;
-      glBindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[gl->active].obj);
-      if ((buf = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY))) {
-         const struct frame_info info = {
-            .ts = gl->pbo[gl->active].ts,
-            .stream = STREAM_VIDEO,
-            .video.format = "rgb24",
-            .video.width = gl->pbo[gl->active].width,
-            .video.height = gl->pbo[gl->active].height,
-            .video.fps = FPS,
-         };
+      const struct frame_info info = {
+         .ts = gl->pbo[gl->active].ts,
+         .stream = STREAM_VIDEO,
+         .format = frame.video,
+         .video.width = gl->pbo[gl->active].width,
+         .video.height = gl->pbo[gl->active].height,
+         .video.fps = FPS,
+      };
 
-         write_data(&info, buf, info.video.width * info.video.height * 3);
+      const void *buf;
+      const size_t size = info.video.width * info.video.height * frame.components;
+      glBindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[gl->active].obj);
+      if ((buf = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, size, GL_MAP_READ_BIT))) {
+         write_data(&info, buf, size);
          glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
          gl->pbo[gl->active].written = false;
       }
@@ -331,11 +360,8 @@ static void
 reset_capture(struct gl *gl)
 {
    for (size_t i = 0; i < NUM_PBOS; ++i) {
-      if (glIsBuffer(gl->pbo[i].obj)) {
+      if (glIsBuffer(gl->pbo[i].obj))
          glDeleteBuffers(1, &gl->pbo[i].obj);
-      } else {
-         WARNX("seems like program recreated opengl context?");
-      }
    }
 
    WARNX("capture reset");
@@ -364,17 +390,26 @@ capture_frame(struct gl *gl, const GLint view[4])
 static void
 draw_indicator(const GLint view[4])
 {
+   GLfloat clear[4];
+   GLboolean scissor;
+   glGetFloatv(GL_COLOR_CLEAR_VALUE, clear);
+   glGetBooleanv(GL_SCISSOR_TEST, &scissor);
+
+   if (!scissor)
+      glEnable(GL_SCISSOR_TEST);
+
    const uint32_t size = (view[3] / 75 > 10 ? view[3] / 75 : 10);
-   glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_SCISSOR_BIT);
-   glEnable(GL_SCISSOR_TEST);
    glScissor(size / 2 - 1, view[3] - size - size / 2 - 1, size + 2, size + 2);
    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
    glClear(GL_COLOR_BUFFER_BIT);
    glScissor(size / 2, view[3] - size - size / 2, size, size);
    glClearColor(1.0f, 0.0f, 0.0f, 0.0f);
    glClear(GL_COLOR_BUFFER_BIT);
-   glDisable(GL_SCISSOR_TEST);
-   glPopAttrib();
+
+   if (!scissor)
+      glDisable(GL_SCISSOR_TEST);
+
+   glClearColor(clear[0], clear[1], clear[2], clear[3]);
 }
 
 static void
@@ -445,10 +480,10 @@ alsa_get_frame_info(snd_pcm_t *pcm, struct frame_info *out_info, const char *cal
    WARN_ONCE("%s (%s:%u:%u)", caller, snd_pcm_format_name(format), rate, channels);
    out_info->ts = get_time_ns();
    out_info->stream = STREAM_AUDIO;
-   out_info->audio.format = alsa_get_format(format);
+   out_info->format = alsa_get_format(format);
    out_info->audio.rate = rate;
    out_info->audio.channels = channels;
-   return (out_info->audio.format != NULL);
+   return (out_info->format != NULL);
 }
 
 static void

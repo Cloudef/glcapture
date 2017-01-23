@@ -134,8 +134,8 @@ hook_function(void **ptr, const char *name, const bool versioned)
       return;
 
    if (versioned) {
-      const char *versions[] = { "GLIBC_2.0", "GLIBC_2.2.5", NULL };
-      for (size_t i = 0; !*ptr && versions[i]; ++i)
+      const char *versions[] = { "GLIBC_2.0", "GLIBC_2.2.5" };
+      for (size_t i = 0; !*ptr && i < ARRAY_SIZE(versions); ++i)
          *ptr = dlvsym(RTLD_NEXT, name, versions[i]);
    } else {
       HOOK_DLSYM(dlsym);
@@ -158,5 +158,3 @@ dlsym(void *handle, const char *symbol)
 
    return store_real_symbol_and_return_fake_symbol(symbol, _dlsym(handle, symbol));
 }
-
-#undef HOOK_DLSYM
