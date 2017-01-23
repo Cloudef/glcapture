@@ -15,7 +15,6 @@
  */
 
 #define _GNU_SOURCE
-#define GL_GLEXT_PROTOTYPES
 #include <dlfcn.h>
 #include <GL/glx.h>
 #include <EGL/egl.h>
@@ -98,33 +97,17 @@ struct fifo {
    bool created;
 };
 
-static void* (*_dlsym)(void*, const char*) = NULL;
-static EGLBoolean (*_eglSwapBuffers)(EGLDisplay, EGLSurface) = NULL;
-static __eglMustCastToProperFunctionPointerType (*_eglGetProcAddress)(const char*) = NULL;
-static void (*_glXSwapBuffers)(Display*, GLXDrawable) = NULL;
-static __GLXextFuncPtr (*_glXGetProcAddress)(const GLubyte*) = NULL;
-static __GLXextFuncPtr (*_glXGetProcAddressARB)(const GLubyte*) = NULL;
-static snd_pcm_sframes_t (*_snd_pcm_writei)(snd_pcm_t*, const void*, snd_pcm_uframes_t) = NULL;
-static snd_pcm_sframes_t (*_snd_pcm_writen)(snd_pcm_t*, void**, snd_pcm_uframes_t) = NULL;
-static snd_pcm_sframes_t (*_snd_pcm_mmap_writei)(snd_pcm_t*, const void*, snd_pcm_uframes_t) = NULL;
-static snd_pcm_sframes_t (*_snd_pcm_mmap_writen)(snd_pcm_t*, void**, snd_pcm_uframes_t) = NULL;
-static int (*_clock_gettime)(clockid_t, struct timespec*) = NULL;
-static void* store_real_symbol_and_return_fake_symbol(const char*, void*);
-static void hook_function(void**, const char*, const bool);
-
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
 #define WARN(x, ...) do { warn("glcapture: "x, ##__VA_ARGS__); } while (0)
 #define WARNX(x, ...) do { warnx("glcapture: "x, ##__VA_ARGS__); } while (0)
 #define ERRX(x, y, ...) do { errx(x, "glcapture: "y, ##__VA_ARGS__); } while (0)
 #define WARN_ONCE(x, ...) do { static bool o = false; if (!o) { WARNX(x, ##__VA_ARGS__); o = true; } } while (0)
-#define HOOK(x) hook_function((void**)&_##x, #x, false)
 
-static uint64_t get_time_ns(void)
-{
-   struct timespec ts;
-   HOOK(clock_gettime);
-   _clock_gettime(CLOCK_MONOTONIC, &ts);
-   return (uint64_t)ts.tv_sec * (uint64_t)1e9 + (uint64_t)ts.tv_nsec;
-}
+static void swap_buffers(void);
+static void alsa_writei(snd_pcm_t *pcm, const void *buffer, const snd_pcm_uframes_t size, const char *caller);
+
+#include "hooks.h"
+#include "glwrangle.h"
 
 static void
 reset_fifo(struct fifo *fifo)
@@ -287,64 +270,6 @@ write_data(const struct frame_info *info, const void *buffer, const size_t size)
    pthread_mutex_unlock(&mutex);
 }
 
-static const char*
-alsa_get_format(const snd_pcm_format_t format)
-{
-   switch (format) {
-      case SND_PCM_FORMAT_FLOAT64_LE: return "f64le";
-      case SND_PCM_FORMAT_FLOAT64_BE: return "f64be";
-      case SND_PCM_FORMAT_FLOAT_LE: return "f32le";
-      case SND_PCM_FORMAT_FLOAT_BE: return "f32be";
-      case SND_PCM_FORMAT_S32_LE: return "s32le";
-      case SND_PCM_FORMAT_S32_BE: return "s32be";
-      case SND_PCM_FORMAT_U32_LE: return "u32le";
-      case SND_PCM_FORMAT_U32_BE: return "u32be";
-      case SND_PCM_FORMAT_S24_LE: return "s24le";
-      case SND_PCM_FORMAT_S24_BE: return "s24be";
-      case SND_PCM_FORMAT_U24_LE: return "u24le";
-      case SND_PCM_FORMAT_U24_BE: return "u24be";
-      case SND_PCM_FORMAT_S16_LE: return "s16le";
-      case SND_PCM_FORMAT_S16_BE: return "s16be";
-      case SND_PCM_FORMAT_U16_LE: return "u16le";
-      case SND_PCM_FORMAT_U16_BE: return "u16be";
-      case SND_PCM_FORMAT_S8: return "s8";
-      case SND_PCM_FORMAT_U8: return "u8";
-      case SND_PCM_FORMAT_MU_LAW: return "mulaw";
-      case SND_PCM_FORMAT_A_LAW: return "alaw";
-      default: break;
-   }
-
-   WARN_ONCE("can't convert alsa format: %u", format);
-   return NULL;
-}
-
-static bool
-alsa_get_frame_info(snd_pcm_t *pcm, struct frame_info *out_info, const char *caller)
-{
-   snd_pcm_format_t format;
-   unsigned int channels, rate;
-   snd_pcm_hw_params_t *params = alloca(snd_pcm_hw_params_sizeof());
-   snd_pcm_hw_params_current(pcm, params);
-   snd_pcm_hw_params_get_format(params, &format);
-   snd_pcm_hw_params_get_channels(params, &channels);
-   snd_pcm_hw_params_get_rate(params, &rate, NULL);
-   WARN_ONCE("%s (%s:%u:%u)", caller, snd_pcm_format_name(format), rate, channels);
-   out_info->ts = get_time_ns();
-   out_info->stream = STREAM_AUDIO;
-   out_info->audio.format = alsa_get_format(format);
-   out_info->audio.rate = rate;
-   out_info->audio.channels = channels;
-   return (out_info->audio.format != NULL);
-}
-
-static void
-alsa_writei(snd_pcm_t *pcm, const void *buffer, const snd_pcm_uframes_t size, const char *caller)
-{
-   struct frame_info info;
-   if (alsa_get_frame_info(pcm, &info, caller))
-      write_data(&info, buffer, snd_pcm_frames_to_bytes(pcm, size));
-}
-
 static void
 capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
 {
@@ -429,7 +354,7 @@ static void
 draw_indicator(const GLint view[4])
 {
    const uint32_t size = (view[3] / 75 > 10 ? view[3] / 75 : 10);
-   glPushAttrib(GL_ENABLE_BIT);
+   glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_SCISSOR_BIT);
    glEnable(GL_SCISSOR_TEST);
    glScissor(size / 2 - 1, view[3] - size - size / 2 - 1, size + 2, size + 2);
    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
@@ -444,6 +369,14 @@ draw_indicator(const GLint view[4])
 static void
 swap_buffers(void)
 {
+   void* (*procs[])(const char*) = {
+      (void*)_eglGetProcAddress,
+      (void*)_glXGetProcAddressARB,
+      (void*)_glXGetProcAddress
+   };
+
+   load_gl_function_pointers(procs, ARRAY_SIZE(procs));
+
    GLint view[4] = {0};
    static __thread struct gl gl;
    const GLenum error0 = glGetError();
@@ -457,148 +390,60 @@ swap_buffers(void)
    }
 }
 
-EGLBoolean
-eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
+static const char*
+alsa_get_format(const snd_pcm_format_t format)
 {
-   HOOK(eglSwapBuffers);
-   swap_buffers();
-   return _eglSwapBuffers(dpy, surface);
-}
-
-__eglMustCastToProperFunctionPointerType
-eglGetProcAddress(const char *procname)
-{
-   HOOK(eglGetProcAddress);
-   return (_eglGetProcAddress ? store_real_symbol_and_return_fake_symbol(procname, _eglGetProcAddress(procname)) : NULL);
-}
-
-void
-glXSwapBuffers(Display *dpy, GLXDrawable drawable)
-{
-   HOOK(glXSwapBuffers);
-   swap_buffers();
-   _glXSwapBuffers(dpy, drawable);
-}
-
-__GLXextFuncPtr
-glXGetProcAddressARB(const GLubyte *procname)
-{
-   HOOK(glXGetProcAddressARB);
-   return (_glXGetProcAddressARB ? store_real_symbol_and_return_fake_symbol((const char*)procname, _glXGetProcAddressARB(procname)) : NULL);
-}
-
-__GLXextFuncPtr
-glXGetProcAddress(const GLubyte *procname)
-{
-   HOOK(glXGetProcAddress);
-   return (_glXGetProcAddress ? store_real_symbol_and_return_fake_symbol((const char*)procname, _glXGetProcAddress(procname)) : NULL);
-}
-
-snd_pcm_sframes_t
-snd_pcm_writei(snd_pcm_t *pcm, const void *buffer, snd_pcm_uframes_t size)
-{
-   HOOK(snd_pcm_writei);
-   alsa_writei(pcm, buffer, size, __func__);
-   return _snd_pcm_writei(pcm, buffer, size);
-}
-
-snd_pcm_sframes_t
-snd_pcm_writen(snd_pcm_t *pcm, void **bufs, snd_pcm_uframes_t size)
-{
-   HOOK(snd_pcm_writen);
-   // FIXME: Implement
-   return _snd_pcm_writen(pcm, bufs, size);
-}
-
-snd_pcm_sframes_t
-snd_pcm_mmap_writei(snd_pcm_t *pcm, const void *buffer, snd_pcm_uframes_t size)
-{
-   HOOK(snd_pcm_mmap_writei);
-   alsa_writei(pcm, buffer, size, __func__);
-   return _snd_pcm_mmap_writei(pcm, buffer, size);
-}
-
-snd_pcm_sframes_t
-snd_pcm_mmap_writen(snd_pcm_t *pcm, void **bufs, snd_pcm_uframes_t size)
-{
-   HOOK(snd_pcm_mmap_writen);
-   // FIXME: Implement
-   return _snd_pcm_mmap_writen(pcm, bufs, size);
-}
-
-int
-clock_gettime(clockid_t clk_id, struct timespec *tp)
-{
-   HOOK(clock_gettime);
-
-   if ((clk_id == CLOCK_MONOTONIC || clk_id == CLOCK_MONOTONIC_RAW)) {
-      static __thread uint64_t base;
-      const uint64_t current = get_time_ns();
-      if (!base) base = current;
-      const uint64_t fake = base + (current - base) * SPEED_HACK;
-      tp->tv_sec = fake / (uint64_t)1e9;
-      tp->tv_nsec = (fake % (uint64_t)1e9);
-      return 0;
+   switch (format) {
+      case SND_PCM_FORMAT_FLOAT64_LE: return "f64le";
+      case SND_PCM_FORMAT_FLOAT64_BE: return "f64be";
+      case SND_PCM_FORMAT_FLOAT_LE: return "f32le";
+      case SND_PCM_FORMAT_FLOAT_BE: return "f32be";
+      case SND_PCM_FORMAT_S32_LE: return "s32le";
+      case SND_PCM_FORMAT_S32_BE: return "s32be";
+      case SND_PCM_FORMAT_U32_LE: return "u32le";
+      case SND_PCM_FORMAT_U32_BE: return "u32be";
+      case SND_PCM_FORMAT_S24_LE: return "s24le";
+      case SND_PCM_FORMAT_S24_BE: return "s24be";
+      case SND_PCM_FORMAT_U24_LE: return "u24le";
+      case SND_PCM_FORMAT_U24_BE: return "u24be";
+      case SND_PCM_FORMAT_S16_LE: return "s16le";
+      case SND_PCM_FORMAT_S16_BE: return "s16be";
+      case SND_PCM_FORMAT_U16_LE: return "u16le";
+      case SND_PCM_FORMAT_U16_BE: return "u16be";
+      case SND_PCM_FORMAT_S8: return "s8";
+      case SND_PCM_FORMAT_U8: return "u8";
+      case SND_PCM_FORMAT_MU_LAW: return "mulaw";
+      case SND_PCM_FORMAT_A_LAW: return "alaw";
+      default: break;
    }
 
-   return _clock_gettime(clk_id, tp);
+   WARN_ONCE("can't convert alsa format: %u", format);
+   return NULL;
 }
 
-#define HOOK_DLSYM(x) hook_function((void**)&_##x, #x, true)
-
-void*
-dlsym(void *handle, const char *symbol)
+static bool
+alsa_get_frame_info(snd_pcm_t *pcm, struct frame_info *out_info, const char *caller)
 {
-   HOOK_DLSYM(dlsym);
-
-   if (!strcmp(symbol, "dlsym"))
-      return dlsym;
-
-   return store_real_symbol_and_return_fake_symbol(symbol, _dlsym(handle, symbol));
-}
-
-static void*
-store_real_symbol_and_return_fake_symbol(const char *symbol, void *ret)
-{
-   if (!ret || !symbol)
-      return ret;
-
-   if (0) {}
-#define SET_IF_NOT_HOOKED(x, y) do { if (!_##x) { _##x = y; WARNX("SET %s to %p", #x, y); } } while (0)
-#define FAKE_SYMBOL(x) else if (!strcmp(symbol, #x)) { SET_IF_NOT_HOOKED(x, ret); return x; }
-   FAKE_SYMBOL(eglSwapBuffers)
-   FAKE_SYMBOL(eglGetProcAddress)
-   FAKE_SYMBOL(glXSwapBuffers)
-   FAKE_SYMBOL(glXGetProcAddressARB)
-   FAKE_SYMBOL(glXGetProcAddress)
-   FAKE_SYMBOL(snd_pcm_writei)
-   FAKE_SYMBOL(snd_pcm_writen)
-   FAKE_SYMBOL(snd_pcm_mmap_writei)
-   FAKE_SYMBOL(snd_pcm_mmap_writen)
-   FAKE_SYMBOL(clock_gettime)
-#undef FAKE_SYMBOL
-#undef SET_IF_NOT_HOOKED
-
-   return ret;
+   snd_pcm_format_t format;
+   unsigned int channels, rate;
+   snd_pcm_hw_params_t *params = alloca(snd_pcm_hw_params_sizeof());
+   snd_pcm_hw_params_current(pcm, params);
+   snd_pcm_hw_params_get_format(params, &format);
+   snd_pcm_hw_params_get_channels(params, &channels);
+   snd_pcm_hw_params_get_rate(params, &rate, NULL);
+   WARN_ONCE("%s (%s:%u:%u)", caller, snd_pcm_format_name(format), rate, channels);
+   out_info->ts = get_time_ns();
+   out_info->stream = STREAM_AUDIO;
+   out_info->audio.format = alsa_get_format(format);
+   out_info->audio.rate = rate;
+   out_info->audio.channels = channels;
+   return (out_info->audio.format != NULL);
 }
 
 static void
-hook_function(void **ptr, const char *name, const bool versioned)
+alsa_writei(snd_pcm_t *pcm, const void *buffer, const snd_pcm_uframes_t size, const char *caller)
 {
-   if (*ptr)
-      return;
-
-   if (versioned) {
-      const char *versions[] = { "GLIBC_2.0", "GLIBC_2.2.5", NULL };
-      for (size_t i = 0; !*ptr && versions[i]; ++i)
-         *ptr = dlvsym(RTLD_NEXT, name, versions[i]);
-   } else {
-      HOOK_DLSYM(dlsym);
-      *ptr = _dlsym(RTLD_NEXT, name);
-   }
-
-   if (!*ptr)
-      ERRX(EXIT_FAILURE, "HOOK FAIL %s", name);
-
-   WARNX("HOOK %s", name);
+   struct frame_info info;
+   if (alsa_get_frame_info(pcm, &info, caller))
+      write_data(&info, buffer, snd_pcm_frames_to_bytes(pcm, size));
 }
