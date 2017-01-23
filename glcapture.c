@@ -58,8 +58,12 @@ static void* store_real_symbol_and_return_fake_symbol(const char *symbol, void *
 #define NUM_PBOS 2
 
 // Target framerate for the video stream
-// FIXME: Currently glcapture does not drop frames, if going over the target framerate
-static double FPS = 60.0;
+static uint32_t FPS = 60;
+
+// Drop frames if going over target framerate
+// Set this to false if you want frame perfect capture
+// If your target framerate is lower than game framerate set this to true (i.e. you want to record at lower fps)
+static bool DROP_FRAMES = true;
 
 // Multiplier for system clock (MONOTONIC, RAW) can be used to make recordings of replays smoother (or speed hack)
 static double SPEED_HACK = 1.0;
@@ -75,12 +79,12 @@ enum stream {
 
 struct pbo {
    uint64_t ts;
+   uint32_t width, height;
    GLuint obj;
    bool written;
 };
 
 struct gl {
-   GLint view[4];
    struct pbo pbo[NUM_PBOS];
    uint8_t active; // pbo
 };
@@ -311,7 +315,7 @@ alsa_get_format(const snd_pcm_format_t format)
    return NULL;
 }
 
-static void
+static bool
 alsa_get_frame_info(snd_pcm_t *pcm, struct frame_info *out_info, const char *caller)
 {
    snd_pcm_format_t format;
@@ -327,58 +331,46 @@ alsa_get_frame_info(snd_pcm_t *pcm, struct frame_info *out_info, const char *cal
    out_info->audio.format = alsa_get_format(format);
    out_info->audio.rate = rate;
    out_info->audio.channels = channels;
+   return (out_info->audio.format != NULL);
 }
 
 static void
 alsa_writei(snd_pcm_t *pcm, const void *buffer, const snd_pcm_uframes_t size, const char *caller)
 {
    struct frame_info info;
-   alsa_get_frame_info(pcm, &info, caller);
-
-   if (!info.audio.format)
-      return;
-
-   write_data(&info, buffer, snd_pcm_frames_to_bytes(pcm, size));
+   if (alsa_get_frame_info(pcm, &info, caller))
+      write_data(&info, buffer, snd_pcm_frames_to_bytes(pcm, size));
 }
 
 static void
-reset_capture(struct gl *gl)
+capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
 {
-   for (size_t i = 0; i < NUM_PBOS; ++i)
-      glDeleteBuffers(1, &gl->pbo[i].obj);
-
-   memset(gl, 0, sizeof(*gl));
-   WARNX("capture reset");
-}
-
-static void
-capture(struct gl *gl, const GLint view[4])
-{
-   if (memcmp(gl->view, view, sizeof(gl->view))) {
-      WARNX("resolution change to: %d,%d+%ux%u", view[0], view[1], view[2], view[3]);
-      reset_capture(gl);
-      return;
-   }
-
    {
-      if (!gl->pbo[gl->active].obj) {
-         glGenBuffers(1, &gl->pbo[gl->active].obj);
-         glBindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[gl->active].obj);
-         glBufferData(GL_PIXEL_PACK_BUFFER, view[2] * view[3] * 3, NULL, GL_STREAM_READ);
+      if (!glIsBuffer(gl->pbo[gl->active].obj)) {
          WARNX("create pbo %u", gl->active);
-      } else {
-         glBindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[gl->active].obj);
+         glGenBuffers(1, &gl->pbo[gl->active].obj);
       }
 
+      glBindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[gl->active].obj);
+      glBufferData(GL_PIXEL_PACK_BUFFER, view[2] * view[3] * 3, NULL, GL_STREAM_READ);
+
+      glPushClientAttrib(GL_CLIENT_PIXEL_STORE_BIT);
       glPixelStorei(GL_PACK_ALIGNMENT, 1);
+      glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+      glPixelStorei(GL_PACK_IMAGE_HEIGHT, 0);
+      glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
       glReadPixels(view[0], view[1], view[2], view[3], GL_RGB, GL_UNSIGNED_BYTE, NULL);
-      gl->pbo[gl->active].ts = get_time_ns();
+      glPopClientAttrib();
+
+      gl->pbo[gl->active].ts = ts;
+      gl->pbo[gl->active].width = view[2];
+      gl->pbo[gl->active].height = view[3];
       gl->pbo[gl->active].written = true;
    }
 
    gl->active = (gl->active + 1) % NUM_PBOS;
 
-   if (gl->pbo[gl->active].written) {
+   if (glIsBuffer(gl->pbo[gl->active].obj) && gl->pbo[gl->active].written) {
       const void *buf;
       glBindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[gl->active].obj);
       if ((buf = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY))) {
@@ -386,8 +378,8 @@ capture(struct gl *gl, const GLint view[4])
             .ts = gl->pbo[gl->active].ts,
             .stream = STREAM_VIDEO,
             .video.format = "rgb24",
-            .video.width = view[2],
-            .video.height = view[3],
+            .video.width = gl->pbo[gl->active].width,
+            .video.height = gl->pbo[gl->active].height,
             .video.fps = FPS,
          };
 
@@ -399,9 +391,44 @@ capture(struct gl *gl, const GLint view[4])
 }
 
 static void
+reset_capture(struct gl *gl)
+{
+   for (size_t i = 0; i < NUM_PBOS; ++i) {
+      if (glIsBuffer(gl->pbo[i].obj)) {
+         glDeleteBuffers(1, &gl->pbo[i].obj);
+      } else {
+         WARNX("seems like program recreated opengl context?");
+      }
+   }
+
+   WARNX("capture reset");
+   memset(gl->pbo, 0, sizeof(gl->pbo));
+   gl->active = 0;
+}
+
+static void
+capture_frame(struct gl *gl, const GLint view[4])
+{
+   static __thread uint64_t last_time;
+   const uint64_t ts = get_time_ns();
+   const uint64_t rate = 1e9 / (FPS * 1.5);
+
+   if (DROP_FRAMES && last_time > 0 && ts - last_time < rate)
+      return;
+
+   last_time = ts;
+
+   GLint pbo;
+   glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pbo);
+   capture_frame_pbo(gl, view, ts);
+   glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
+}
+
+static void
 draw_indicator(const GLint view[4])
 {
    const uint32_t size = (view[3] / 75 > 10 ? view[3] / 75 : 10);
+   glPushAttrib(GL_ENABLE_BIT);
    glEnable(GL_SCISSOR_TEST);
    glScissor(size / 2 - 1, view[3] - size - size / 2 - 1, size + 2, size + 2);
    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
@@ -410,6 +437,7 @@ draw_indicator(const GLint view[4])
    glClearColor(1.0f, 0.0f, 0.0f, 0.0f);
    glClear(GL_COLOR_BUFFER_BIT);
    glDisable(GL_SCISSOR_TEST);
+   glPopAttrib();
 }
 
 void
@@ -421,11 +449,8 @@ glXSwapBuffers(Display *dpy, GLXDrawable drawable)
    static __thread struct gl gl;
    const GLenum error0 = glGetError();
    glGetIntegerv(GL_VIEWPORT, view);
-   glPushAttrib(GL_ALL_ATTRIB_BITS);
-   capture(&gl, view);
+   capture_frame(&gl, view);
    draw_indicator(view);
-   glPopAttrib();
-   memcpy(gl.view, view, sizeof(gl.view));
 
    if (error0 != glGetError()) {
       WARNX("glError occured");
