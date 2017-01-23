@@ -1,16 +1,16 @@
 #pragma once
 
-static void* (*_dlsym)(void*, const char*) = NULL;
-static EGLBoolean (*_eglSwapBuffers)(EGLDisplay, EGLSurface) = NULL;
-static __eglMustCastToProperFunctionPointerType (*_eglGetProcAddress)(const char*) = NULL;
-static void (*_glXSwapBuffers)(Display*, GLXDrawable) = NULL;
-static __GLXextFuncPtr (*_glXGetProcAddress)(const GLubyte*) = NULL;
-static __GLXextFuncPtr (*_glXGetProcAddressARB)(const GLubyte*) = NULL;
-static snd_pcm_sframes_t (*_snd_pcm_writei)(snd_pcm_t*, const void*, snd_pcm_uframes_t) = NULL;
-static snd_pcm_sframes_t (*_snd_pcm_writen)(snd_pcm_t*, void**, snd_pcm_uframes_t) = NULL;
-static snd_pcm_sframes_t (*_snd_pcm_mmap_writei)(snd_pcm_t*, const void*, snd_pcm_uframes_t) = NULL;
-static snd_pcm_sframes_t (*_snd_pcm_mmap_writen)(snd_pcm_t*, void**, snd_pcm_uframes_t) = NULL;
-static int (*_clock_gettime)(clockid_t, struct timespec*) = NULL;
+static void* (*_dlsym)(void*, const char*);
+static EGLBoolean (*_eglSwapBuffers)(EGLDisplay, EGLSurface);
+static __eglMustCastToProperFunctionPointerType (*_eglGetProcAddress)(const char*);
+static void (*_glXSwapBuffers)(Display*, GLXDrawable);
+static __GLXextFuncPtr (*_glXGetProcAddress)(const GLubyte*);
+static __GLXextFuncPtr (*_glXGetProcAddressARB)(const GLubyte*);
+static snd_pcm_sframes_t (*_snd_pcm_writei)(snd_pcm_t*, const void*, snd_pcm_uframes_t);
+static snd_pcm_sframes_t (*_snd_pcm_writen)(snd_pcm_t*, void**, snd_pcm_uframes_t);
+static snd_pcm_sframes_t (*_snd_pcm_mmap_writei)(snd_pcm_t*, const void*, snd_pcm_uframes_t);
+static snd_pcm_sframes_t (*_snd_pcm_mmap_writen)(snd_pcm_t*, void**, snd_pcm_uframes_t);
+static int (*_clock_gettime)(clockid_t, struct timespec*);
 static void* store_real_symbol_and_return_fake_symbol(const char*, void*);
 static void hook_function(void**, const char*, const bool);
 
