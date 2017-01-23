@@ -9,7 +9,7 @@
  * You can test that it works by doing ./ffplay /tmp/glcapture.fifo
  *
  * Make sure you increase your maximum pipe size /prox/sys/fs/pipe-max-size
- * to minimum of 15 * (width * height * 3)
+ * to minimum of (FPS / 4) * ((width * height * 3) + 13)
  *
  * If you get xruns from alsa, consider increasing your audio buffer size.
  */
