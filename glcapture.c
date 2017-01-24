@@ -349,7 +349,8 @@ capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
       uint8_t components;
    } frame = {
       // XXX: Maybe on ES we should instead modify the data and remove A component?
-      //      Would save some transmission bandwidth at least
+      //      Would save some transmission bandwidth at least (from GPU and to PIPE)
+      //      RGB also is unaligned, but seem just as fast as RGBA on Nvidia.
       .video = (OPENGL_VARIANT == OPENGL_ES ? "rgb0" : "rgb"),
       .format = (OPENGL_VARIANT == OPENGL_ES ? GL_RGBA : GL_RGB),
       .components = (OPENGL_VARIANT == OPENGL_ES ? 4 : 3),
