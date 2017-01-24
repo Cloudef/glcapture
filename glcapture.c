@@ -124,6 +124,24 @@ struct fifo {
    bool created;
 };
 
+struct buffer {
+   void *data;
+   size_t size, allocated;
+};
+
+static void
+buffer_resize(struct buffer *buffer, const size_t size)
+{
+   if (buffer->allocated < size) {
+      if (!(buffer->data = realloc(buffer->data, size)))
+         ERR(EXIT_FAILURE, "realloc(%p, %zu)", buffer->data, size);
+
+      buffer->allocated = size;
+   }
+
+   buffer->size = size;
+}
+
 static uint64_t
 get_time_ns(void)
 {
@@ -308,14 +326,12 @@ flip_pixels_if_needed(const GLint view[4], uint8_t *pixels, const uint32_t width
       return;
 
    // Sadly I can't come up with any reliable way to do this on GPU on all possible OpenGL versions and variants.
-   const uint32_t stride = width * components;
-   static __thread struct { size_t size; uint8_t *data; } row;
-   if (row.size < stride) {
-      if (!(row.data = realloc(row.data, stride)))
-         ERR(EXIT_FAILURE, "realloc(%p, %u)", row.data, stride);
+   // FIXME: This function however is quite expensive and causes capture to take more than 1ms easily.
+   //        Should try dig deeper and see how I could make GPU do the flip without having to read twice.
 
-      row.size = stride;
-   }
+   const uint32_t stride = width * components;
+   static __thread struct buffer row;
+   buffer_resize(&row, stride);
 
    for (uint8_t *lo = pixels, *hi = pixels + (height - 1) * stride; lo < hi; lo += stride, hi -= stride) {
       memcpy(row.data, lo, stride);
