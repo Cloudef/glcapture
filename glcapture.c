@@ -492,8 +492,8 @@ swap_buffers(void)
    }
 
    const double ms = (get_time_ns() - start) / 1e6;
-   if (ms >= 1.0)
-      WARNX("WARNING: capture took %.2f ms (>=1ms)", ms);
+   if (ms >= 2.0)
+      WARNX("WARNING: capture took %.2f ms (>=2ms)", ms);
 }
 
 static const char*
