@@ -468,6 +468,8 @@ draw_indicator(const GLint view[4])
 static void
 swap_buffers(void)
 {
+   const uint64_t start = get_time_ns();
+
    void* (*procs[])(const char*) = {
       (void*)_eglGetProcAddress,
       (void*)_glXGetProcAddressARB,
@@ -487,6 +489,10 @@ swap_buffers(void)
       WARNX("glError occured");
       reset_capture(&gl);
    }
+
+   const double ms = (get_time_ns() - start) / 1e6;
+   if (ms >= 1.0)
+      WARNX("WARNING: capture took %.2f ms (>=1ms)", ms);
 }
 
 static const char*
