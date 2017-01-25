@@ -122,7 +122,7 @@ load_gl_function_pointers(void* (*procs[])(const char*), const size_t memb)
 
    if (glDebugMessageCallback) {
       // GL_DEBUG_OUTPUT_SYNCHRONOUS for breakpoints (slower)
-      glEnable(GL_DEBUG_OUTPUT);
+      // glEnable(GL_DEBUG_OUTPUT);
       // glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
       glDebugMessageCallback(debug_cb, NULL);
    }

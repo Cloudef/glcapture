@@ -14,6 +14,12 @@
  * If you get xruns from alsa, consider increasing your audio buffer size.
  */
 
+/**
+ * TODO:
+ * - Consider alternative such as using DRM/VAAPI to encode directly to pipe
+ * - NVENC also exists for nv blob, however seems to not have public GL interop
+ */
+
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <stdlib.h>
@@ -38,7 +44,8 @@
 // XXX: Make these configurable
 
 // Use any amount you want as long as you have the vram for it
-#define NUM_PBOS 3
+// If you get warning of write_frame taking time, even when not reading the pipe, increase this
+#define NUM_PBOS 20
 
 // Target framerate for the video stream
 static uint32_t FPS = 60;
@@ -129,6 +136,13 @@ struct buffer {
    void *data;
    size_t size, allocated;
 };
+
+#define PROFILE(x, warn_ms, name) do { \
+   const uint64_t start = get_time_ns(); \
+   x; \
+   const double ms = (get_time_ns() - start) / 1e6; \
+   if (ms >= warn_ms) WARNX("WARNING: %s took %.2f ms (>=%.0fms)", name, ms, warn_ms); \
+} while (0)
 
 static void
 buffer_resize(struct buffer *buffer, const size_t size)
@@ -298,7 +312,7 @@ write_data_unsafe(struct fifo *fifo, const struct frame_info *info, const void *
          }
 
          fifo->size = pipe_sz;
-         setvbuf(fifo->file, NULL, _IOFBF, fifo->size);
+         setvbuf(fifo->file, NULL, _IOFBF, fifo->size / 8);
       }
    }
 
@@ -369,15 +383,16 @@ capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
       glGenBuffers(1, &gl->pbo[gl->active].obj);
    }
 
-   glBindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[gl->active].obj);
-   glBufferData(GL_PIXEL_PACK_BUFFER, view[2] * view[3] * frame.components, NULL, GL_STREAM_READ);
-
    struct { GLenum t; GLint o; GLint v; } map[] = {
       { .t = GL_PACK_ALIGNMENT, .v = 1 },
       { .t = GL_PACK_ROW_LENGTH },
       { .t = GL_PACK_IMAGE_HEIGHT },
       { .t = GL_PACK_SKIP_PIXELS },
    };
+
+   PROFILE(
+   glBindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[gl->active].obj);
+   glBufferData(GL_PIXEL_PACK_BUFFER, view[2] * view[3] * frame.components, NULL, GL_STREAM_READ);
 
    for (size_t i = 0; i < ARRAY_SIZE(map); ++i) {
       glGetIntegerv(map[i].t, &map[i].o);
@@ -393,6 +408,7 @@ capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
    gl->pbo[gl->active].width = view[2];
    gl->pbo[gl->active].height = view[3];
    gl->pbo[gl->active].written = true;
+   , 1.0, "read_frame");
 
    gl->active = (gl->active + 1) % NUM_PBOS;
 
@@ -408,6 +424,7 @@ capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
 
       void *buf;
       const size_t size = info.video.width * info.video.height * frame.components;
+      PROFILE(
       glBindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[gl->active].obj);
       if ((buf = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, size, GL_MAP_READ_BIT))) {
          flip_pixels_if_needed(view, buf, info.video.width, info.video.height, frame.components);
@@ -415,6 +432,7 @@ capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
          glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
          gl->pbo[gl->active].written = false;
       }
+      , 2.0, "write_frame");
    }
 }
 
@@ -436,7 +454,7 @@ capture_frame(struct gl *gl, const GLint view[4])
 {
    static __thread uint64_t last_time;
    const uint64_t ts = get_time_ns();
-   const uint64_t rate = 1e9 / (FPS * 1.5);
+   const uint64_t rate = 1e9 / FPS;
 
    if (DROP_FRAMES && last_time > 0 && ts - last_time < rate)
       return;
@@ -477,8 +495,6 @@ draw_indicator(const GLint view[4])
 static void
 swap_buffers(void)
 {
-   const uint64_t start = get_time_ns();
-
    void* (*procs[])(const char*) = {
       (void*)_eglGetProcAddress,
       (void*)_glXGetProcAddressARB,
@@ -487,21 +503,19 @@ swap_buffers(void)
 
    load_gl_function_pointers(procs, ARRAY_SIZE(procs));
 
+   PROFILE(
    GLint view[4] = {0};
    static __thread struct gl gl;
    const GLenum error0 = glGetError();
    glGetIntegerv(GL_VIEWPORT, view);
-   capture_frame(&gl, view);
-   draw_indicator(view);
+   PROFILE(capture_frame(&gl, view), 2.0, "capture_frame");
+   PROFILE(draw_indicator(view), 0.5, "draw_indicator");
 
    if (error0 != glGetError()) {
       WARNX("glError occured");
       reset_capture(&gl);
    }
-
-   const double ms = (get_time_ns() - start) / 1e6;
-   if (ms >= 2.0)
-      WARNX("WARNING: capture took %.2f ms (>=2ms)", ms);
+   , 2.0, "swap_buffers");
 }
 
 static const char*
@@ -559,7 +573,7 @@ alsa_writei(snd_pcm_t *pcm, const void *buffer, const snd_pcm_uframes_t size, co
 {
    struct frame_info info;
    if (alsa_get_frame_info(pcm, &info, caller))
-      write_data(&info, buffer, snd_pcm_frames_to_bytes(pcm, size));
+      PROFILE(write_data(&info, buffer, snd_pcm_frames_to_bytes(pcm, size)), 2.0, "alsa_write");
 }
 
 static uint64_t
