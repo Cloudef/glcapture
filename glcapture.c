@@ -118,6 +118,7 @@ struct fifo {
       struct frame_info info;
    } stream[STREAM_LAST];
 
+   FILE *file;
    uint64_t base;
    size_t size;
    int fd;
@@ -196,7 +197,7 @@ write_rawmux_header(struct fifo *fifo)
       memcpy(p, &info->audio.channels, sizeof(info->audio.channels)); p += 1;
    }
 
-   return (write(fifo->fd, header, (p + 1) - header) == (p + 1) - header);
+   return (fwrite(header, 1, (p + 1) - header, fifo->file) == (size_t)((p + 1) - header));
 }
 
 static bool
@@ -242,6 +243,12 @@ check_and_prepare_stream(struct fifo *fifo, const struct frame_info *info)
 
       if ((fifo->fd = open(FIFO_PATH, O_WRONLY | O_NONBLOCK | O_CLOEXEC)) < 0)
          return false;
+
+      // We will use fwrite instead of write for buffered writes.
+      // Which will be more stable, since audio/video data isn't actually that large per frame.
+      // We also avoid calling to kernel each call.
+      fifo->file = fdopen(fifo->fd, "wb");
+      assert(fifo->file);
 
       const int flags = fcntl(fifo->fd, F_GETFL);
       fcntl(fifo->fd, F_SETFL, flags & ~O_NONBLOCK);
@@ -291,13 +298,14 @@ write_data_unsafe(struct fifo *fifo, const struct frame_info *info, const void *
          }
 
          fifo->size = pipe_sz;
+         setvbuf(fifo->file, NULL, _IOFBF, fifo->size);
       }
    }
 
    errno = 0;
-   ssize_t ret;
-   if ((ret = write(fifo->fd, frame, sizeof(frame)) != (ssize_t)sizeof(frame)) ||
-      ((ret = write(fifo->fd, buffer, size)) != (ssize_t)size)) {
+   size_t ret;
+   if ((ret = fwrite(frame, 1, sizeof(frame), fifo->file) != sizeof(frame)) ||
+      ((ret = fwrite(buffer, 1, size, fifo->file)) != size)) {
       WARN("write(%zu) (%u)", ret, info->stream);
       reset_fifo(fifo);
    }
