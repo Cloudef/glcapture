@@ -13,14 +13,18 @@ static snd_pcm_sframes_t (*_snd_pcm_mmap_writei)(snd_pcm_t*, const void*, snd_pc
 static snd_pcm_sframes_t (*_snd_pcm_mmap_writen)(snd_pcm_t*, void**, snd_pcm_uframes_t);
 static int (*_clock_gettime)(clockid_t, struct timespec*);
 static void* store_real_symbol_and_return_fake_symbol(const char*, void*);
-static void hook_function(void**, const char*, const bool);
+static void hook_function(void**, const char*, const bool, const char*[]);
 
-#define HOOK(x) hook_function((void**)&_##x, #x, false)
+#define HOOK(x) hook_function((void**)&_##x, #x, false, NULL)
+#define HOOK_FROM(x, ...) hook_function((void**)&_##x, #x, false, (const char*[]){ __VA_ARGS__, NULL })
+
+// Use HOOK_FROM with this list for any GL/GLX stuff
+#define GL_LIBS "libGL.so", "libGLESv1_CM.so", "libGLESv2.so", "libGLX.so"
 
 void
 glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter)
 {
-   HOOK(glBlitFramebuffer);
+   HOOK_FROM(glBlitFramebuffer, GL_LIBS);
    const GLint a[] = { srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1 };
    memcpy(LAST_FRAMEBUFFER_BLIT, a, sizeof(a));
    _glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
@@ -29,7 +33,7 @@ glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX
 EGLBoolean
 eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
 {
-   HOOK(eglSwapBuffers);
+   HOOK_FROM(eglSwapBuffers, "libEGL.so");
    swap_buffers();
    return _eglSwapBuffers(dpy, surface);
 }
@@ -37,14 +41,14 @@ eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
 __eglMustCastToProperFunctionPointerType
 eglGetProcAddress(const char *procname)
 {
-   HOOK(eglGetProcAddress);
+   HOOK_FROM(eglGetProcAddress, "libEGL.so");
    return (_eglGetProcAddress ? store_real_symbol_and_return_fake_symbol(procname, _eglGetProcAddress(procname)) : NULL);
 }
 
 void
 glXSwapBuffers(Display *dpy, GLXDrawable drawable)
 {
-   HOOK(glXSwapBuffers);
+   HOOK_FROM(glXSwapBuffers, GL_LIBS);
    swap_buffers();
    _glXSwapBuffers(dpy, drawable);
 }
@@ -52,14 +56,14 @@ glXSwapBuffers(Display *dpy, GLXDrawable drawable)
 __GLXextFuncPtr
 glXGetProcAddressARB(const GLubyte *procname)
 {
-   HOOK(glXGetProcAddressARB);
+   HOOK_FROM(glXGetProcAddressARB, GL_LIBS);
    return (_glXGetProcAddressARB ? store_real_symbol_and_return_fake_symbol((const char*)procname, _glXGetProcAddressARB(procname)) : NULL);
 }
 
 __GLXextFuncPtr
 glXGetProcAddress(const GLubyte *procname)
 {
-   HOOK(glXGetProcAddress);
+   HOOK_FROM(glXGetProcAddress, GL_LIBS);
    return (_glXGetProcAddress ? store_real_symbol_and_return_fake_symbol((const char*)procname, _glXGetProcAddress(procname)) : NULL);
 }
 
@@ -136,21 +140,40 @@ store_real_symbol_and_return_fake_symbol(const char *symbol, void *ret)
    return ret;
 }
 
-#define HOOK_DLSYM(x) hook_function((void**)&_##x, #x, true)
+#define HOOK_DLSYM(x) hook_function((void**)&_##x, #x, true, NULL)
+
+static void*
+get_symbol(void *src, const char *name, const bool versioned)
+{
+   if (!src)
+      return NULL;
+
+   if (versioned) {
+      void *ptr = NULL;
+      const char *versions[] = { "GLIBC_2.0", "GLIBC_2.2.5" };
+      for (size_t i = 0; !ptr && i < ARRAY_SIZE(versions); ++i)
+         ptr = dlvsym(src, name, versions[i]);
+      return ptr;
+   }
+
+   HOOK_DLSYM(dlsym);
+   return _dlsym(src, name);
+}
 
 static void
-hook_function(void **ptr, const char *name, const bool versioned)
+hook_function(void **ptr, const char *name, const bool versioned, const char *srcs[])
 {
    if (*ptr)
       return;
 
-   if (versioned) {
-      const char *versions[] = { "GLIBC_2.0", "GLIBC_2.2.5" };
-      for (size_t i = 0; !*ptr && i < ARRAY_SIZE(versions); ++i)
-         *ptr = dlvsym(RTLD_NEXT, name, versions[i]);
-   } else {
-      HOOK_DLSYM(dlsym);
-      *ptr = _dlsym(RTLD_NEXT, name);
+   *ptr = get_symbol(RTLD_NEXT, name, versioned);
+
+   for (size_t i = 0; !*ptr && srcs && srcs[i]; ++i) {
+      // If we know where the symbol comes from, but program e.g. used dlopen with RTLD_LOCAL
+      // Should be only needed with GL/GLES/EGL stuff as we don't link to those for reason.
+      void *so = dlopen(srcs[i], RTLD_LAZY | RTLD_NOLOAD);
+      WARNX("Trying dlopen: %s (%p) (RTLD_LAZY | RTLD_NOLOAD)", srcs[i], so);
+      *ptr = get_symbol(so, name, versioned);
    }
 
    if (!*ptr)
