@@ -38,7 +38,7 @@
 // XXX: Make these configurable
 
 // Use any amount you want as long as you have the vram for it
-#define NUM_PBOS 2
+#define NUM_PBOS 3
 
 // Target framerate for the video stream
 static uint32_t FPS = 60;
