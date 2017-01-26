@@ -311,6 +311,10 @@ write_data_unsafe(struct fifo *fifo, const struct frame_info *info, const void *
          }
 
          fifo->size = pipe_sz;
+
+         // Set some reasonable buffer size for fwrites
+         // This is still experimental and if you get smoother output by setting this to
+         // _IONBF let me know.
          setvbuf(fifo->file, NULL, _IOFBF, fifo->size / 8);
       }
    }
