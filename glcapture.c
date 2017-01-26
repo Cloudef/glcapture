@@ -452,8 +452,7 @@ reset_capture(struct gl *gl)
    }
 
    WARNX("capture reset");
-   memset(gl->pbo, 0, sizeof(gl->pbo));
-   gl->active = 0;
+   *gl = (struct gl){0};
 }
 
 static void
