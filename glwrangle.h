@@ -64,8 +64,9 @@ debug_cb(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length,
 static void*
 dlsym_proc(const char *procname)
 {
-   HOOK_DLSYM(dlsym);
-   return _dlsym(RTLD_NEXT, procname);
+   void *ptr = NULL;
+   hook_function(&ptr, procname, false, (const char*[]){ GL_LIBS, NULL });
+   return ptr;
 }
 
 static void
