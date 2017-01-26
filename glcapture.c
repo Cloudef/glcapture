@@ -522,7 +522,7 @@ swap_buffers(void)
    const GLenum error0 = glGetError();
    glGetIntegerv(GL_VIEWPORT, view);
    PROFILE(capture_frame(&gl, view), 2.0, "capture_frame");
-   PROFILE(draw_indicator(view), 0.5, "draw_indicator");
+   PROFILE(draw_indicator(view), 1.0, "draw_indicator");
 
    if (error0 != glGetError()) {
       WARNX("glError occured");
