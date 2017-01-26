@@ -44,8 +44,8 @@
 // XXX: Make these configurable
 
 // Use any amount you want as long as you have the vram for it
-// If you get warning of write_frame taking time, even when not reading the pipe, increase this
-#define NUM_PBOS 20
+// If you get warning of map_buffer taking time, try increasing this
+#define NUM_PBOS 32
 
 // Target framerate for the video stream
 static uint32_t FPS = 60;
@@ -431,15 +431,20 @@ capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
 
       void *buf;
       const size_t size = info.video.width * info.video.height * frame.components;
+
       PROFILE(
       glBindBuffer(GL_PIXEL_PACK_BUFFER, gl->pbo[gl->active].obj);
-      if ((buf = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, size, GL_MAP_READ_BIT))) {
+      buf = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, size, GL_MAP_READ_BIT);
+      , 2.0, "map_buffer");
+
+      if (buf) {
+         PROFILE(
          flip_pixels_if_needed(view, buf, info.video.width, info.video.height, frame.components);
          write_data(&info, buf, size);
          glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
          gl->pbo[gl->active].written = false;
+         , 2.0, "write_frame");
       }
-      , 2.0, "write_frame");
    }
 }
 
