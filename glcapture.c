@@ -48,7 +48,7 @@
 #define NUM_PBOS 32
 
 // Target framerate for the video stream
-static uint32_t FPS = 60;
+static uint32_t TARGET_FPS = 60;
 
 // Drop frames if going over target framerate
 // Set this to false if you want frame perfect capture
@@ -301,7 +301,7 @@ write_data_unsafe(struct fifo *fifo, const struct frame_info *info, const void *
    memcpy(frame + 1 + 4, (uint64_t[]){pts}, sizeof(uint64_t));
 
    {
-      const size_t pipe_sz = (FPS / 4) * (size + sizeof(frame));
+      const size_t pipe_sz = (TARGET_FPS / 4) * (size + sizeof(frame));
 
       if (fifo->size < pipe_sz) {
          if (fcntl(fifo->fd, F_SETPIPE_SZ, pipe_sz) == -1) {
@@ -425,7 +425,7 @@ capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
          .format = frame.video,
          .video.width = gl->pbo[gl->active].width,
          .video.height = gl->pbo[gl->active].height,
-         .video.fps = FPS,
+         .video.fps = TARGET_FPS,
       };
 
       void *buf;
@@ -460,13 +460,14 @@ reset_capture(struct gl *gl)
 }
 
 static void
-capture_frame(struct gl *gl, const GLint view[4])
+capture_frame(struct gl *gl, const uint64_t ts, const uint32_t fps, const GLint view[4])
 {
    static __thread uint64_t last_time;
-   const uint64_t ts = get_time_ns();
-   const uint64_t rate = (1e9 / FPS) / 2;
+   const uint64_t target_rate = (1e9 / TARGET_FPS);
+   const uint64_t current_rate = (1e9 / fps);
+   const uint64_t rate = target_rate - current_rate;
 
-   if (DROP_FRAMES && last_time > 0 && ts - last_time <= rate) {
+   if (DROP_FRAMES && last_time > 0 && target_rate > current_rate && ts - last_time <= rate) {
       WARNX("WARNING: dropping frame (%.2f <= %.2f)", (ts - last_time) / 1e6, rate / 1e6);
       return;
    }
@@ -507,6 +508,11 @@ draw_indicator(const GLint view[4])
 static void
 swap_buffers(void)
 {
+   static __thread uint64_t last_time;
+   const uint64_t ts = get_time_ns();
+   const uint32_t fps = (last_time > 0 ? 1.0 / ((ts - last_time) / 1e9) : TARGET_FPS);
+   last_time = ts;
+
    void* (*procs[])(const char*) = {
       (void*)_eglGetProcAddress,
       (void*)_glXGetProcAddressARB,
@@ -520,7 +526,7 @@ swap_buffers(void)
    static __thread struct gl gl;
    const GLenum error0 = glGetError();
    glGetIntegerv(GL_VIEWPORT, view);
-   PROFILE(capture_frame(&gl, view), 2.0, "capture_frame");
+   PROFILE(capture_frame(&gl, ts, fps, view), 2.0, "capture_frame");
    PROFILE(draw_indicator(view), 1.0, "draw_indicator");
 
    if (error0 != glGetError()) {
