@@ -362,6 +362,12 @@ flip_pixels_if_needed(const GLint view[4], uint8_t *pixels, const uint32_t width
    }
 }
 
+static bool
+is_buffer(GLuint obj)
+{
+   return (obj > 0 && glIsBuffer(obj));
+}
+
 static void
 capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
 {
@@ -378,7 +384,7 @@ capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
       .components = (OPENGL_VARIANT == OPENGL_ES ? 4 : 3),
    };
 
-   if (!glIsBuffer(gl->pbo[gl->active].obj)) {
+   if (!is_buffer(gl->pbo[gl->active].obj)) {
       WARNX("create pbo %u", gl->active);
       glGenBuffers(1, &gl->pbo[gl->active].obj);
    }
@@ -408,12 +414,12 @@ capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
    gl->pbo[gl->active].ts = ts;
    gl->pbo[gl->active].width = view[2];
    gl->pbo[gl->active].height = view[3];
-   gl->pbo[gl->active].written = true;
+   gl->pbo[gl->active].written = (glGetError() == GL_NO_ERROR);
    , 1.0, "read_frame");
 
    gl->active = (gl->active + 1) % NUM_PBOS;
 
-   if (glIsBuffer(gl->pbo[gl->active].obj) && gl->pbo[gl->active].written) {
+   if (is_buffer(gl->pbo[gl->active].obj) && gl->pbo[gl->active].written) {
       const struct frame_info info = {
          .ts = gl->pbo[gl->active].ts,
          .stream = STREAM_VIDEO,
@@ -441,7 +447,7 @@ static void
 reset_capture(struct gl *gl)
 {
    for (size_t i = 0; i < NUM_PBOS; ++i) {
-      if (glIsBuffer(gl->pbo[i].obj))
+      if (is_buffer(gl->pbo[i].obj))
          glDeleteBuffers(1, &gl->pbo[i].obj);
    }
 
