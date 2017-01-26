@@ -271,7 +271,7 @@ check_and_prepare_stream(struct fifo *fifo, const struct frame_info *info)
       if (!write_rawmux_header(fifo))
          return false;
 
-      fifo->base = get_time_ns();
+      fifo->base = info->ts;
    }
 
    return true;
@@ -280,13 +280,12 @@ check_and_prepare_stream(struct fifo *fifo, const struct frame_info *info)
 static void
 write_data_unsafe(struct fifo *fifo, const struct frame_info *info, const void *buffer, const size_t size)
 {
-   if (!check_and_prepare_stream(fifo, info))
+   if (!check_and_prepare_stream(fifo, info) || info->ts < fifo->base)
       return;
 
-   const uint64_t ts = (fifo->base > info->ts ? fifo->base : info->ts);
    const uint64_t den[STREAM_LAST] = { 1e6, 1e9 };
    const uint64_t rate = (info->stream == STREAM_VIDEO ? info->video.fps : info->audio.rate);
-   const uint64_t pts = (ts - fifo->base) / (den[info->stream] / rate);
+   const uint64_t pts = (info->ts - fifo->base) / (den[info->stream] / rate);
 
 #if 0
    WARNX("PTS: (%u) %llu", info->stream, pts);
