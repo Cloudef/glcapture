@@ -455,10 +455,12 @@ capture_frame(struct gl *gl, const GLint view[4])
 {
    static __thread uint64_t last_time;
    const uint64_t ts = get_time_ns();
-   const uint64_t rate = 1e9 / FPS;
+   const uint64_t rate = (1e9 / FPS) / 2;
 
-   if (DROP_FRAMES && last_time > 0 && ts - last_time < rate)
+   if (DROP_FRAMES && last_time > 0 && ts - last_time <= rate) {
+      WARNX("WARNING: dropping frame (%.2f <= %.2f)", (ts - last_time) / 1e6, rate / 1e6);
       return;
+   }
 
    last_time = ts;
 
