@@ -508,10 +508,15 @@ draw_indicator(const GLint view[4])
 static void
 swap_buffers(void)
 {
-   static __thread uint64_t last_time;
+   static __thread uint64_t last_time, fps_time;
    const uint64_t ts = get_time_ns();
    const uint32_t fps = (last_time > 0 ? 1.0 / ((ts - last_time) / 1e9) : TARGET_FPS);
    last_time = ts;
+
+   if ((ts - fps_time) / 1e9 > 5.0) {
+      WARNX("FPS: %u", fps);
+      fps_time = ts;
+   }
 
    void* (*procs[])(const char*) = {
       (void*)_eglGetProcAddress,
