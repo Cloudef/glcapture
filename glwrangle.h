@@ -1,5 +1,6 @@
 #pragma once
 
+static void (*_glFlush)(void);
 static GLenum (*_glGetError)(void);
 static void (*_glGetIntegerv)(GLenum, GLint*);
 static void (*_glGetFloatv)(GLenum, GLfloat*);
@@ -33,6 +34,7 @@ struct gl_version {
 static enum gl_variant OPENGL_VARIANT;
 static struct gl_version OPENGL_VERSION;
 
+#define glFlush _glFlush
 #define glGetError _glGetError
 #define glGetIntegerv _glGetIntegerv
 #define glGetFloatv _glGetFloatv
@@ -99,6 +101,7 @@ load_gl_function_pointers(void* (*procs[])(const char*), const size_t memb)
 
 #define GL_REQUIRED(x) do { if (!(_##x = proc(#x))) { ERRX(EXIT_FAILURE, "Failed to load %s", #x); } } while (0)
 #define GL_OPTIONAL(x) do { _##x = proc(#x); } while (0)
+   GL_REQUIRED(glFlush);
    GL_REQUIRED(glGetError);
    GL_REQUIRED(glGetIntegerv);
    GL_REQUIRED(glGetFloatv);

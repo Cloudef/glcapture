@@ -400,6 +400,7 @@ capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
    }
 
    glReadPixels(view[0], view[1], view[2], view[3], frame.format, GL_UNSIGNED_BYTE, NULL);
+   glFlush();
 
    for (size_t i = 0; i < ARRAY_SIZE(map); ++i)
       glPixelStorei(map[i].t, map[i].o);
