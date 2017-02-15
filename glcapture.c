@@ -169,7 +169,7 @@ get_time_ns_clock(clockid_t clk_id)
 static uint64_t
 get_time_ns(void)
 {
-   return get_time_ns_clock(CLOCK_MONOTONIC);
+   return get_time_ns_clock(CLOCK_MONOTONIC_COARSE);
 }
 
 static void
