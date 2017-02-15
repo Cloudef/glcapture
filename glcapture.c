@@ -10,6 +10,7 @@
  *
  * Make sure you increase your maximum pipe size /prox/sys/fs/pipe-max-size to minimum of
  * (FPS / 4) * ((width * height * components) + 13) where components is 3 on OpenGL and 4 on OpenGL ES.
+ * Also set /proc/sys/fs/pipe-user-pages-soft to 0.
  *
  * If you get xruns from alsa, consider increasing your audio buffer size.
  */
