@@ -138,9 +138,9 @@ struct buffer {
 };
 
 #define PROFILE(x, warn_ms, name) do { \
-   const uint64_t start = get_time_ns(); \
+   const uint64_t start = get_time_ns_clock(CLOCK_PROCESS_CPUTIME_ID); \
    x; \
-   const double ms = (get_time_ns() - start) / 1e6; \
+   const double ms = (get_time_ns_clock(CLOCK_PROCESS_CPUTIME_ID) - start) / 1e6; \
    if (ms >= warn_ms) WARNX("WARNING: %s took %.2f ms (>=%.0fms)", name, ms, warn_ms); \
 } while (0)
 
