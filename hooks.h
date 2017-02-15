@@ -103,15 +103,10 @@ int
 clock_gettime(clockid_t clk_id, struct timespec *tp)
 {
    HOOK(clock_gettime);
-
-   if ((clk_id == CLOCK_MONOTONIC || clk_id == CLOCK_MONOTONIC_RAW)) {
-      const uint64_t fake = get_fake_time_ns();
-      tp->tv_sec = fake / (uint64_t)1e9;
-      tp->tv_nsec = (fake % (uint64_t)1e9);
-      return 0;
-   }
-
-   return _clock_gettime(clk_id, tp);
+   const uint64_t fake = get_fake_time_ns(clk_id);
+   tp->tv_sec = fake / (uint64_t)1e9;
+   tp->tv_nsec = (fake % (uint64_t)1e9);
+   return 0;
 }
 
 static void*

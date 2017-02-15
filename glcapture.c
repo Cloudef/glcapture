@@ -55,7 +55,7 @@ static uint32_t TARGET_FPS = 60;
 // If your target framerate is lower than game framerate set this to true (i.e. you want to record at lower fps)
 static bool DROP_FRAMES = true;
 
-// Multiplier for system clock (MONOTONIC, RAW) can be used to make recordings of replays smoother (or speed hack)
+// Multiplier for system clock. Can be used to make recordings of replays smoother (or speed hack)
 static double SPEED_HACK = 1.0;
 
 // If your video is upside down set this to false
@@ -86,7 +86,7 @@ static const bool ENABLED_STREAMS[STREAM_LAST] = {
 // "entrypoints" exposed to hooks.h
 static void swap_buffers(void);
 static void alsa_writei(snd_pcm_t *pcm, const void *buffer, const snd_pcm_uframes_t size, const char *caller);
-static uint64_t get_fake_time_ns(void);
+static uint64_t get_fake_time_ns(clockid_t clk_id);
 static __thread GLint LAST_FRAMEBUFFER_BLIT[8];
 
 #include "hooks.h"
@@ -158,12 +158,18 @@ buffer_resize(struct buffer *buffer, const size_t size)
 }
 
 static uint64_t
-get_time_ns(void)
+get_time_ns_clock(clockid_t clk_id)
 {
    struct timespec ts;
    HOOK(clock_gettime);
-   _clock_gettime(CLOCK_MONOTONIC, &ts);
+   _clock_gettime(clk_id, &ts);
    return (uint64_t)ts.tv_sec * (uint64_t)1e9 + (uint64_t)ts.tv_nsec;
+}
+
+static uint64_t
+get_time_ns(void)
+{
+   return get_time_ns_clock(CLOCK_MONOTONIC);
 }
 
 static void
@@ -604,10 +610,11 @@ alsa_writei(snd_pcm_t *pcm, const void *buffer, const snd_pcm_uframes_t size, co
 }
 
 static uint64_t
-get_fake_time_ns(void)
+get_fake_time_ns(clockid_t clk_id)
 {
-   static __thread uint64_t base;
-   const uint64_t current = get_time_ns();
-   base = (base ? base : current);
-   return base + (current - base) * SPEED_HACK;
+   static __thread uint64_t base[16];
+   assert((size_t)clk_id < ARRAY_SIZE(base));
+   const uint64_t current = get_time_ns_clock(clk_id);
+   base[clk_id] = (base[clk_id] ? base[clk_id] : current);
+   return base[clk_id] + (current - base[clk_id]) * SPEED_HACK;
 }
