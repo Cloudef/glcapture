@@ -1,5 +1,7 @@
 #pragma once
 
+#include <sys/wait.h>
+
 static void* (*_dlsym)(void*, const char*);
 static void (*_glBlitFramebuffer)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum);
 static EGLBoolean (*_eglSwapBuffers)(EGLDisplay, EGLSurface);
@@ -11,6 +13,7 @@ static snd_pcm_sframes_t (*_snd_pcm_writei)(snd_pcm_t*, const void*, snd_pcm_ufr
 static snd_pcm_sframes_t (*_snd_pcm_writen)(snd_pcm_t*, void**, snd_pcm_uframes_t);
 static snd_pcm_sframes_t (*_snd_pcm_mmap_writei)(snd_pcm_t*, const void*, snd_pcm_uframes_t);
 static snd_pcm_sframes_t (*_snd_pcm_mmap_writen)(snd_pcm_t*, void**, snd_pcm_uframes_t);
+static void (*_glShaderSource)(GLuint, GLsizei, const GLchar *const*, const GLint *) = NULL;
 static int (*_clock_gettime)(clockid_t, struct timespec*);
 static void* store_real_symbol_and_return_fake_symbol(const char*, void*);
 static void hook_function(void**, const char*, const bool, const char*[]);
@@ -21,6 +24,100 @@ static void hook_dlsym(void**, const char*);
 
 // Use HOOK_FROM with this list for any GL/GLX stuff
 #define GL_LIBS "libGL.so", "libGLESv1_CM.so", "libGLESv2.so", "libGLX.so"
+
+static void
+close_fd(int *fd)
+{
+   assert(fd);
+   if (*fd >= 0)
+      close(*fd);
+}
+
+struct proc {
+   pid_t pid;
+   int fds[2];
+};
+
+static bool
+proc_open(const char *bin, struct proc *out_proc)
+{
+   assert(bin && out_proc);
+   *out_proc = (struct proc){0};
+
+   int pipes[4];
+   pipe(&pipes[0]); /* parent */
+   pipe(&pipes[2]); /* child */
+
+   if ((out_proc->pid = fork()) > 0) {
+      out_proc->fds[0] = pipes[3];
+      out_proc->fds[1] = pipes[0];
+      close(pipes[1]);
+      close(pipes[2]);
+      return true;
+   } else {
+      close(pipes[0]);
+      close(pipes[3]);
+      dup2(pipes[2], 0);
+      dup2(pipes[1], 1);
+      execlp(bin, bin, NULL);
+      _exit(0);
+   }
+
+   return false;
+}
+
+static void
+proc_close(struct proc *proc)
+{
+   assert(proc);
+   waitpid(proc->pid, NULL, 0);
+   close_fd(&proc->fds[0]);
+   close_fd(&proc->fds[1]);
+   *proc = (struct proc){0};
+}
+
+static size_t
+safe_read(int fd, void *dst, const size_t dst_size)
+{
+   size_t off = 0;
+   ssize_t ret = 0;
+   for (; off < dst_size && (ret = read(fd, dst + off, dst_size - off)) > 0; off += ret);
+   return (ret < 0 ? 0 : off);
+}
+
+void
+glShaderSource(GLuint shader, GLsizei count, const GLchar *const *string, const GLint *length)
+{
+   HOOK_FROM(glShaderSource, GL_LIBS);
+
+   const char *filter;
+   if ((filter = getenv("SHADER_FILTER"))) {
+      struct proc proc;
+      if (!proc_open(filter, &proc))
+         ERRX(EXIT_FAILURE, "Could not execute filter: %s", filter);
+
+      for (GLsizei i = 0; i < count; ++i) {
+         if (length) {
+            write(proc.fds[0], string[i], length[i]);
+         } else {
+            write(proc.fds[0], string[i], strlen(string[i]));
+         }
+      }
+
+      static const size_t SHADER_MAX_SIZE = 4096 * 1024;
+      static __thread char *src;
+      if (!src && !(src = malloc(SHADER_MAX_SIZE)))
+         ERRX(EXIT_FAILURE, "no memory");
+
+      close_fd(&proc.fds[0]);
+      const size_t src_size = safe_read(proc.fds[1], src, SHADER_MAX_SIZE);
+      proc_close(&proc);
+
+      _glShaderSource(shader, 1, (const GLchar*[]){src}, (const GLint[]){src_size});
+   } else {
+      _glShaderSource(shader, count, string, length);
+   }
+}
 
 void
 glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter)
@@ -125,6 +222,7 @@ store_real_symbol_and_return_fake_symbol(const char *symbol, void *ret)
    FAKE_SYMBOL(glXSwapBuffers)
    FAKE_SYMBOL(glXGetProcAddressARB)
    FAKE_SYMBOL(glXGetProcAddress)
+   FAKE_SYMBOL(glShaderSource)
    FAKE_SYMBOL(snd_pcm_writei)
    FAKE_SYMBOL(snd_pcm_writen)
    FAKE_SYMBOL(snd_pcm_mmap_writei)
