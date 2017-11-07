@@ -14,6 +14,7 @@ static snd_pcm_sframes_t (*_snd_pcm_mmap_writen)(snd_pcm_t*, void**, snd_pcm_ufr
 static int (*_clock_gettime)(clockid_t, struct timespec*);
 static void* store_real_symbol_and_return_fake_symbol(const char*, void*);
 static void hook_function(void**, const char*, const bool, const char*[]);
+static void hook_dlsym(void**, const char*);
 
 #define HOOK(x) hook_function((void**)&_##x, #x, false, NULL)
 #define HOOK_FROM(x, ...) hook_function((void**)&_##x, #x, false, (const char*[]){ __VA_ARGS__, NULL })
@@ -135,7 +136,7 @@ store_real_symbol_and_return_fake_symbol(const char *symbol, void *ret)
    return ret;
 }
 
-#define HOOK_DLSYM(x) hook_function((void**)&_##x, #x, true, NULL)
+#define HOOK_DLSYM(x) hook_dlsym((void**)&_##x, #x)
 
 static void*
 get_symbol(void *src, const char *name, const bool versioned)
@@ -175,6 +176,21 @@ hook_function(void **ptr, const char *name, const bool versioned, const char *sr
       ERRX(EXIT_FAILURE, "HOOK FAIL %s", name);
 
    WARNX("HOOK %s", name);
+}
+
+static void
+hook_dlsym(void **ptr, const char *name)
+{
+   if (*ptr)
+      return;
+
+   hook_function(ptr, name, true, NULL);
+
+   void *next;
+   if ((next = _dlsym(RTLD_NEXT, name))) {
+      WARNX("chaining %s: %p -> %p", name, ptr, next);
+      *ptr = next;
+   }
 }
 
 void*
