@@ -46,7 +46,7 @@
 
 // Use any amount you want as long as you have the vram for it
 // If you get warning of map_buffer taking time, try increasing this
-#define NUM_PBOS 32
+#define NUM_PBOS 4
 
 // Target framerate for the video stream
 static uint32_t TARGET_FPS = 60;
