@@ -536,16 +536,16 @@ swap_buffers(void)
    };
 
    load_gl_function_pointers(procs, ARRAY_SIZE(procs));
+   while (glGetError() != GL_NO_ERROR);
 
    PROFILE(
    GLint view[4] = {0};
    static __thread struct gl gl;
-   const GLenum error0 = glGetError();
    glGetIntegerv(GL_VIEWPORT, view);
    PROFILE(capture_frame(&gl, ts, fps, view), 2.0, "capture_frame");
    PROFILE(draw_indicator(view), 1.0, "draw_indicator");
 
-   if (error0 != glGetError()) {
+   if (glGetError() != GL_NO_ERROR) {
       WARNX("glError occured");
       reset_capture(&gl);
    }
