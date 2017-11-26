@@ -347,14 +347,10 @@ write_data(const struct frame_info *info, const void *buffer, const size_t size)
 }
 
 void
-flip_pixels_if_needed(const GLint view[4], uint8_t *pixels, const uint32_t width, const uint32_t height, const uint8_t components)
+flip_pixels_if_needed(const GLint view[8], uint8_t *pixels, const uint32_t width, const uint32_t height, const uint8_t components)
 {
    // Will detect at least wine which blits viewport sized framebuffer at the end already flipped
-   if (!FLIP_VIDEO ||
-       (LAST_FRAMEBUFFER_BLIT[0] == 0 && LAST_FRAMEBUFFER_BLIT[1] == 0 &&
-        LAST_FRAMEBUFFER_BLIT[2] == view[2] && LAST_FRAMEBUFFER_BLIT[3] == view[3] &&
-        LAST_FRAMEBUFFER_BLIT[4] == 0 && LAST_FRAMEBUFFER_BLIT[5] == view[3] &&
-        LAST_FRAMEBUFFER_BLIT[6] == view[2] && LAST_FRAMEBUFFER_BLIT[7] == 0))
+   if (!FLIP_VIDEO || (view[5] == view[3] && view[6] == view[2]))
       return;
 
    // Sadly I can't come up with any reliable way to do this on GPU on all possible OpenGL versions and variants.
@@ -379,7 +375,7 @@ is_buffer(GLuint obj)
 }
 
 static void
-capture_frame_pbo(struct gl *gl, const GLint view[4], const uint64_t ts)
+capture_frame_pbo(struct gl *gl, const GLint view[8], const uint64_t ts)
 {
    const struct {
       const char *video;
@@ -492,7 +488,7 @@ capture_frame(struct gl *gl, const uint64_t ts, const uint32_t fps, const GLint 
 }
 
 static void
-draw_indicator(const GLint view[4])
+draw_indicator(const GLint view[8])
 {
    GLfloat clear[4];
    GLboolean scissor;
@@ -539,9 +535,15 @@ swap_buffers(void)
    while (glGetError() != GL_NO_ERROR);
 
    PROFILE(
-   GLint view[4] = {0};
    static __thread struct gl gl;
-   glGetIntegerv(GL_VIEWPORT, view);
+   GLint view[ARRAY_SIZE(LAST_FRAMEBUFFER_BLIT)];
+
+   if (LAST_FRAMEBUFFER_BLIT[2] == 0 || LAST_FRAMEBUFFER_BLIT[3] == 0) {
+      glGetIntegerv(GL_VIEWPORT, view);
+   } else {
+      memcpy(view, LAST_FRAMEBUFFER_BLIT, sizeof(view));
+   }
+
    PROFILE(capture_frame(&gl, ts, fps, view), 2.0, "capture_frame");
    PROFILE(draw_indicator(view), 1.0, "draw_indicator");
 
