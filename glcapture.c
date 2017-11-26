@@ -65,6 +65,10 @@ static bool FLIP_VIDEO = true;
 // Path for the fifo where glcapture will output the rawmux data
 static const char *FIFO_PATH = "/tmp/glcapture.fifo";
 
+// Debugging
+#define PROFILING false
+#define SHOW_FRAME_DROPS false
+
 enum stream {
    STREAM_VIDEO,
    STREAM_AUDIO,
@@ -142,7 +146,7 @@ struct buffer {
    const uint64_t start = get_time_ns_clock(CLOCK_PROCESS_CPUTIME_ID); \
    x; \
    const double ms = (get_time_ns_clock(CLOCK_PROCESS_CPUTIME_ID) - start) / 1e6; \
-   if (ms >= warn_ms) WARNX("WARNING: %s took %.2f ms (>=%.0fms)", name, ms, warn_ms); \
+   if (PROFILING && ms >= warn_ms) WARNX("WARNING: %s took %.2f ms (>=%.0fms)", name, ms, warn_ms); \
 } while (0)
 
 static void
@@ -475,7 +479,8 @@ capture_frame(struct gl *gl, const uint64_t ts, const uint32_t fps, const GLint 
    const uint64_t rate = target_rate - current_rate;
 
    if (DROP_FRAMES && last_time > 0 && target_rate > current_rate && ts - last_time <= rate) {
-      WARNX("WARNING: dropping frame (%.2f <= %.2f)", (ts - last_time) / 1e6, rate / 1e6);
+      if (SHOW_FRAME_DROPS)
+         WARNX("WARNING: dropping frame (%.2f <= %.2f)", (ts - last_time) / 1e6, rate / 1e6);
       return;
    }
 
