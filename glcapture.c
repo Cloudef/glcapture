@@ -467,10 +467,10 @@ reset_capture(struct gl *gl)
 }
 
 static void
-capture_frame(struct gl *gl, const uint64_t ts, const uint32_t fps, const GLint view[4])
+capture_frame(struct gl *gl, const uint64_t ts, const uint32_t fps, const GLint view[8])
 {
    static __thread uint64_t last_time;
-   const uint64_t target_rate = (1e9 / TARGET_FPS);
+   const uint64_t target_rate = (1e9 / (TARGET_FPS * 2));
    const uint64_t current_rate = (1e9 / fps);
    const uint64_t rate = target_rate - current_rate;
 
